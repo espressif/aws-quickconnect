@@ -9,22 +9,20 @@ struct NetworkContext
     esp_tls_t* pxTls;
 };
 
-void networkingInit(NetworkContext_t* pxNetworkContext,
+void vNetworkingInit(NetworkContext_t* pxNetworkContext,
     MQTTContext_t* pxMQTTContext);
 
-void setWifiCredentials(const char* ssid, const char* password);
+BaseType_t xSetWifiCredentials(const char* ssid, const char* password);
 
-BaseType_t tlsConnect(NetworkContext_t* pxNetworkContext,
-    const char* hostname,
-    int port,
-    const char* server_cert_pem,
-    const char* client_cert_pem,
-    const char* client_key_pem);
+BaseType_t xTlsConnect(NetworkContext_t* pxNetworkContext,
+    const char* pcHostname, int xPort, const char* pcServerCertPem,
+    const char* pcClientCertPem, const char* pcClientKeyPem);
 
-esp_err_t tlsDisconnect(NetworkContext_t* pxNetworkContext);
+BaseType_t xTlsDisconnect(NetworkContext_t* pxNetworkContext);
 
-MQTTStatus_t eMqttConnect(MQTTContext_t* pxMQTTContext, const char* thingName);
+MQTTStatus_t eMqttConnect(MQTTContext_t* pxMQTTContext, const char* pcThingName);
 
-MQTTStatus_t eMqttPublishFMConnect(MQTTContext_t* pxMQTTContext, const char* thingName, const char* sendBuffer);
+MQTTStatus_t eMqttPublishFMConnect(MQTTContext_t* pxMQTTContext, 
+    const char* thingName, const char* sendBuffer);
 
 #endif /* FMCONNECT_NETWORKING_H */

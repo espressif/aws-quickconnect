@@ -8,45 +8,49 @@
 #include "core_mqtt.h"
 #include "networking.h"
 
-#define MILLISECONDS_PER_SECOND                           ( 1000U )
-#define MILLISECONDS_PER_TICK                             ( MILLISECONDS_PER_SECOND / configTICK_RATE_HZ )
+#define MILLISECONDS_PER_SECOND ( 1000U )
+#define MILLISECONDS_PER_TICK ( MILLISECONDS_PER_SECOND / configTICK_RATE_HZ )
 
 static const char* TAG = "FMConnectNetworking";
 
-void setWifiCredentials(const char* ssid, const char* password)
+BaseType_t xSetWifiCredentials(const char* ssid, const char* password)
 {
-
+    BaseType_t xRet = pdFALSE;
     wifi_config_t wifi_config = { 0 };
     strncpy((char*)wifi_config.sta.ssid, ssid, 32);
     strncpy((char*)wifi_config.sta.password, password, 64);
-    ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_STA, &wifi_config));
+    if(esp_wifi_set_config(WIFI_IF_STA, &wifi_config) != ESP_OK)
+    {
+        ESP_LOGE(TAG, "Failed to set WiFi credentials.");
+    }
+    else
+    {
+        xRet = pdTRUE;
+    }
 
-    return;
+    return xRet;
 }
 
-/* TLS Start */
-BaseType_t tlsConnect(NetworkContext_t* pxNetworkContext,
-    const char* hostname,
-    int port,
-    const char* server_cert_pem,
-    const char* client_cert_pem,
-    const char* client_key_pem)
+BaseType_t xTlsConnect(NetworkContext_t* pxNetworkContext,
+    const char* pcHostname, int xPort, const char* pcServerCertPem,
+    const char* pcClientCertPem, const char* pcClientKeyPem)
 {
     BaseType_t ret = pdTRUE;
 
     esp_tls_cfg_t cfg = {
-        .cacert_buf = (const unsigned char*)server_cert_pem,
-        .cacert_bytes = strlen(server_cert_pem) + 1,
-        .clientcert_buf = (const unsigned char*)client_cert_pem,
-        .clientcert_bytes = strlen(client_cert_pem) + 1,
-        .clientkey_buf = (const unsigned char*)client_key_pem,
-        .clientkey_bytes = strlen(client_key_pem) + 1,
+        .cacert_buf = (const unsigned char*)pcServerCertPem,
+        .cacert_bytes = strlen(pcServerCertPem) + 1,
+        .clientcert_buf = (const unsigned char*)pcClientCertPem,
+        .clientcert_bytes = strlen(pcClientKeyPem) + 1,
+        .clientkey_buf = (const unsigned char*)pcClientKeyPem,
+        .clientkey_bytes = strlen(pcClientKeyPem) + 1,
     };
 
     esp_tls_t* pxTls = esp_tls_init();
     pxNetworkContext->pxTls = pxTls;
 
-    if (esp_tls_conn_new_sync(hostname, strlen(hostname), port, &cfg, pxTls) <= 0)
+    if (esp_tls_conn_new_sync(pcHostname, strlen(pcHostname), xPort, &cfg, pxTls)
+        <= 0)
     {
         ret = pdFALSE;
     }
@@ -54,11 +58,12 @@ BaseType_t tlsConnect(NetworkContext_t* pxNetworkContext,
     return ret;
 }
 
-BaseType_t tlsDisconnect(NetworkContext_t* pxNetworkContext)
+BaseType_t xTlsDisconnect(NetworkContext_t* pxNetworkContext)
 {
     BaseType_t ret = pdTRUE;
 
-    if (pxNetworkContext->pxTls != NULL && esp_tls_conn_destroy(pxNetworkContext->pxTls) < 0)
+    if (pxNetworkContext->pxTls != NULL && 
+        esp_tls_conn_destroy(pxNetworkContext->pxTls) < 0)
     {
         ret = pdFALSE;
     }
@@ -66,7 +71,7 @@ BaseType_t tlsDisconnect(NetworkContext_t* pxNetworkContext)
     return ret;
 }
 
-int32_t espTLSTransportSend(NetworkContext_t* pxNetworkContext,
+static int32_t prvEspTlsTransportSend(NetworkContext_t* pxNetworkContext,
     const void* data,
     size_t datalen)
 {
@@ -77,7 +82,7 @@ int32_t espTLSTransportSend(NetworkContext_t* pxNetworkContext,
     return bytesSent;
 }
 
-int32_t espTLSTransportRecv(NetworkContext_t* pxNetworkContext,
+static int32_t prvEspTlsTransportRecv(NetworkContext_t* pxNetworkContext,
     void* data,
     size_t datalen)
 {
@@ -87,7 +92,6 @@ int32_t espTLSTransportRecv(NetworkContext_t* pxNetworkContext,
 
     return bytesRead;
 }
-/* TLS End */
 
 /* MQTT Start */
 
@@ -131,7 +135,8 @@ static void prvMqttEventCallback(MQTTContext_t* pxMQTTContext,
     {
     case MQTT_PACKET_TYPE_PUBACK:
         ESP_LOGI(TAG,"PUBACK received for packet Id %u.", usPacketId);
-        /* Make sure ACK packet identifier matches with Request packet identifier. */
+        /* Make sure ACK packet identifier matches with Request packet 
+         * identifier. */
         assert(usPublishPacketIdentifier == usPacketId);
         break;
 
@@ -163,8 +168,8 @@ static MQTTStatus_t prvMqttInit(NetworkContext_t* pxNetworkContext,
 
     /* Set up transport for coreMQTT */
     xTransport.pNetworkContext = pxNetworkContext;
-    xTransport.send = espTLSTransportSend;
-    xTransport.recv = espTLSTransportRecv;
+    xTransport.send = prvEspTlsTransportSend;
+    xTransport.recv = prvEspTlsTransportRecv;
 
     /* Gives an initial value to the timer for MQTT timing */
     ulGlobalEntryTimeMs = prvMqttGetTimeMs();
@@ -199,8 +204,9 @@ MQTTStatus_t eMqttConnect(MQTTContext_t* pxMQTTContext, const char* thingName)
     xConnectInfo.pClientIdentifier = thingName;
     xConnectInfo.clientIdentifierLength = (uint16_t)strlen(thingName);
 
-    /* Set MQTT keep-alive period. If the application does not send packets at an interval less than
-     * the keep-alive period, the MQTT library will send PINGREQ packets. */
+    /* Set MQTT keep-alive period. If the application does not send packets at 
+     * an interval less than the keep-alive period, the MQTT library will send 
+     * PINGREQ packets. */
     xConnectInfo.keepAliveSeconds = 5U;
 
     xResult = MQTT_Connect(pxMQTTContext,
@@ -230,7 +236,8 @@ MQTTStatus_t eMqttPublishFMConnect(MQTTContext_t* pxMQTTContext,
     usPublishPacketIdentifier = MQTT_GetPacketId(pxMQTTContext);
 
     /* Send PUBLISH packet. */
-    xResult = MQTT_Publish(pxMQTTContext, &xMQTTPublishInfo, usPublishPacketIdentifier);
+    xResult = MQTT_Publish(pxMQTTContext, &xMQTTPublishInfo, 
+        usPublishPacketIdentifier);
 
     if (xResult == MQTTSendFailed)
     {
@@ -243,9 +250,8 @@ MQTTStatus_t eMqttPublishFMConnect(MQTTContext_t* pxMQTTContext,
 
     return xResult;
 }
-/* MQTT End */
 
-void networkingInit(NetworkContext_t* pxNetworkContext,
+void vNetworkingInit(NetworkContext_t* pxNetworkContext,
     MQTTContext_t* pxMQTTContext)
 {
     /* Initialize Network Interface
