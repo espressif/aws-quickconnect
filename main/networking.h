@@ -23,8 +23,8 @@ BaseType_t tlsConnect(NetworkContext_t* pxNetworkContext,
 
 esp_err_t tlsDisconnect(NetworkContext_t* pxNetworkContext);
 
-MQTTStatus_t mqttConnect(MQTTContext_t* pxMQTTContext, const char* thingName);
+MQTTStatus_t eMqttConnect(MQTTContext_t* pxMQTTContext, const char* thingName);
 
-MQTTStatus_t mqttPublishAndReceiveFMConnect(MQTTContext_t* pxMQTTContext, const char* thingName, const char* sendBuffer);
+MQTTStatus_t eMqttPublishFMConnect(MQTTContext_t* pxMQTTContext, const char* thingName, const char* sendBuffer);
 
 #endif /* FMCONNECT_NETWORKING_H */

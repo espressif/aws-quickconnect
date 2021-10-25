@@ -4,10 +4,5 @@
 # CMakeLists in this exact order for cmake to work correctly
 cmake_minimum_required(VERSION 3.5)
 
-# Add RainMaker components and other common application components
-set(RMAKER_PATH ${CMAKE_CURRENT_LIST_DIR}/esp-rainmaker)
-set(EXTRA_COMPONENT_DIRS ${RMAKER_PATH}/components)
-
 include($ENV{IDF_PATH}/tools/cmake/project.cmake)
 project(FMConnectEspressif)
-

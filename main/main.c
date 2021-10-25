@@ -15,12 +15,14 @@
 #include "core_mqtt.h"
 #include "networking.h"
 
+/* Temperature Sensor Driver */
 #include "driver/temp_sensor.h"
 
-/* self claiming */
-#include "esp_rmaker_core.h"
-#include "esp_rmaker_client_data.h"
+/* Self-Claiming  */
 #include "esp_rmaker_claim.h"
+
+/* Self-Claiming Definitions */
+#define MAX_SELF_CLAIM_ATTEMPTS 10
 
 /* Network Event Group Bit Definitions */
 #define WIFI_CONNECTED_BIT           (1 << 0)
@@ -44,9 +46,108 @@ static char* pcClientCert = NULL;
 static char* pcClientKey = NULL;
 
 /* Networking Globals */
-EventGroupHandle_t xNetworkEventGroup;
+static EventGroupHandle_t xNetworkEventGroup;
 static MQTTContext_t xMQTTContext = { 0 };
 static NetworkContext_t xNetworkContext = { 0 };
+
+static char *pcNvsGetStr(const char *pcPartitionName, 
+    const char *pcNamespace, 
+    const char *pcKey)
+{
+    size_t uxLengthRequired;
+    nvs_handle_t xNvsHandle;
+    char *pcRet = NULL;
+    
+    if(pcPartitionName == NULL)
+    {
+        ESP_LOGE(TAG, "Partition name is null.");
+
+    }
+    else if(pcNamespace == NULL)
+    {
+        ESP_LOGE(TAG, "Namespace is null.");
+    }
+    else if(pcKey == NULL)
+    {
+        ESP_LOGE(TAG, "Key is null.");
+    }
+    else if(nvs_flash_init_partition(pcPartitionName) != ESP_OK)
+    {
+        ESP_LOGE(TAG, "Could not initialize partition: %s.", pcPartitionName);
+    }
+    else if(nvs_open_from_partition(pcPartitionName, pcNamespace, NVS_READONLY, &xNvsHandle) != ESP_OK)
+    {
+        ESP_LOGE(TAG, "Could not open namespace: %s on partition: %s for reading.", pcNamespace, pcPartitionName);
+    }
+    else
+    {
+        if(nvs_get_str(xNvsHandle, pcKey, NULL, &uxLengthRequired) != ESP_OK)
+        {
+            ESP_LOGE(TAG, "Could not open key: %s from namespace: %s on partition: %s for reading.", pcKey, pcNamespace, pcPartitionName);
+        }
+        else
+        {
+            pcRet = malloc(uxLengthRequired);
+
+            if(pcRet == NULL)
+            {
+                ESP_LOGE(TAG, "Failed to allocate memory for NVS to output string.");
+            }
+            else if(nvs_get_str(xNvsHandle, pcKey, pcRet, &uxLengthRequired) != ESP_OK)
+            {
+                ESP_LOGE(TAG, "Could not output key: %s from namespace: %s on partition: %s.", pcKey, pcNamespace, pcPartitionName);
+            }
+        }
+    }
+
+    return pcRet;
+}
+
+BaseType_t xNvsSetStr(const char *pcPartitionName, 
+    const char *pcNamespace, 
+    const char *pcKey,
+    const char *pcValue)
+{
+    nvs_handle_t xNvsHandle;
+
+    BaseType_t xRet = pdFALSE;
+
+    if(pcPartitionName == NULL)
+    {
+        ESP_LOGE(TAG, "Partition name is null.");
+
+    }
+    else if(pcNamespace == NULL)
+    {
+        ESP_LOGE(TAG, "Namespace is null.");
+    }
+    else if(pcKey == NULL)
+    {
+        ESP_LOGE(TAG, "Key is null.");
+    }
+    else if(pcValue == NULL)
+    {
+        ESP_LOGE(TAG, "Value is null.");
+    }
+    else if(nvs_flash_init_partition(pcPartitionName) != ESP_OK)
+    {
+        ESP_LOGE(TAG, "Could not initialize partition: %s.", pcPartitionName);
+    }
+    else if(nvs_open_from_partition(pcPartitionName, pcNamespace, NVS_READWRITE, &xNvsHandle) != ESP_OK)
+    {
+        ESP_LOGE(TAG, "Could not open namespace: %s on partition: %s for writing.", pcNamespace, pcPartitionName);
+    }
+    else if(nvs_set_str(xNvsHandle, pcKey, pcValue) != ESP_OK)
+    {
+        ESP_LOGE(TAG, "Could not set key: %s in namespace: %s on partition: %s.", pcKey, pcNamespace, pcPartitionName);
+    }
+    else
+    {
+        xRet = pdTRUE;
+    }
+
+    return xRet;
+}
 
 static void wifiEventHandler(void* arg,
     esp_event_base_t event_base,
@@ -67,6 +168,8 @@ static void wifiEventHandler(void* arg,
     default:
         break;
     }
+
+    return;
 }
 
 static void ipEventHandler(void* arg,
@@ -82,48 +185,84 @@ static void ipEventHandler(void* arg,
     default:
         break;
     }
+
+    return;
 }
 
 void vSelfClaimTask(void* pvParameters)
 {
     (void)pvParameters;
+    
+    BaseType_t xSelfClaimSuccessful = pdFALSE;
 
-    esp_rmaker_config_t rainmaker_cfg = {
-                .enable_time_sync = false,
-    };
-    esp_rmaker_node_t* node = esp_rmaker_node_init(&rainmaker_cfg, "FMConnect", "FMConnect");
-    ESP_LOGI(TAG, "rmaker init done");
-    if (esp_rmaker_get_client_cert() == NULL)
+    /* See if device already has device credentials from self-claiming */
+    pcClientCert = pcNvsGetStr("tls_keys", "FMC", "certificate");
+    pcClientKey = pcNvsGetStr("tls_keys", "FMC", "key");
+
+    /* Perform self-claiming if the device does not have the device credentials */
+    if(pcClientCert == NULL || pcClientKey == NULL)
     {
-        do
+        esp_rmaker_claim_data_t *pxSelfClaimData = esp_rmaker_self_claim_init(pcThingName);
+
+        if(pxSelfClaimData != NULL)
         {
-            vTaskDelay(10);
-            xEventGroupWaitBits(xNetworkEventGroup,
-                WIFI_CONNECTED_BIT | IP_GOT_BIT,
-                pdFALSE,
-                pdTRUE,
-                portMAX_DELAY);
-        }         while (esp_rmaker_self_claim_perform(esp_rmaker_self_claim_init()) != ESP_OK);
+            uint16_t usSelfClaimAttempts = 0;
+            while(xSelfClaimSuccessful == pdFALSE && usSelfClaimAttempts < MAX_SELF_CLAIM_ATTEMPTS)
+            {
+                vTaskDelay(10);
+                /* Wait for the device to have an IP before trying to self-claim */
+                xEventGroupWaitBits(xNetworkEventGroup,
+                    IP_GOT_BIT,
+                    pdFALSE,
+                    pdTRUE,
+                    portMAX_DELAY);
+                    
+                if(esp_rmaker_self_claim_perform(pxSelfClaimData) != ESP_OK)
+                {
+                    ++usSelfClaimAttempts;
+                }
+                else
+                {
+                    xSelfClaimSuccessful = pdTRUE;
+                    pcClientCert = get_self_claim_certificate();
+                    pcClientKey = get_self_claim_private_key();
+
+                    if(xNvsSetStr("tls_keys", "FMC", "certificate", pcClientCert) == pdFALSE)
+                    {
+                        ESP_LOGE(TAG, "Self-claiming certificate failed to store.");
+                    }
+                    
+                    if(xNvsSetStr("tls_keys", "FMC", "key", pcClientKey) == pdFALSE)
+                    {
+                        ESP_LOGE(TAG, "Self-claiming private key failed to store.");
+                    }
+                }
+            }
+
+        }
+
+    }
+    else
+    {
+        xSelfClaimSuccessful = pdTRUE;
     }
 
-    esp_rmaker_node_deinit(node);
+    if(xSelfClaimSuccessful == pdTRUE)
+    {
+        ESP_LOGI(TAG, "Self-claiming successful.");
+        xEventGroupSetBits(xNetworkEventGroup, SELF_CLAIM_PERFORMED_BIT);
 
-    pcClientCert = esp_rmaker_get_client_cert();
-    pcClientKey = esp_rmaker_get_client_key();
+        /* Send device credentials out so they can be registered */
+        printf("DEVICE_CERT_START\n%s\nDEVICE_CERT_END\n", pcClientCert);
+        printf("DEVICE_THING_NAME_START\n%s\nDEVICE_THING_NAME_END\n", pcThingName);
 
-    ESP_LOGI(TAG, "Self-claiming performed.");
+    }
+    else
+    {
+        ESP_LOGI(TAG, "Self-claiming failed.");
+        xEventGroupSetBits(xNetworkEventGroup, SELF_CLAIM_NOT_PERFORMED_BIT);
+    }
 
-    xEventGroupSetBits(xNetworkEventGroup, SELF_CLAIM_PERFORMED_BIT);
-
-    xEventGroupWaitBits(xNetworkEventGroup,
-        WIFI_CONNECTED_BIT,
-        pdFALSE,
-        pdTRUE,
-        portMAX_DELAY);
-
-    /* Send device credentials out so they can be registered */
-    printf("DEVICE_CERT_START\n%s\nDEVICE_CERT_END\n", pcClientCert);
-    printf("DEVICE_THING_NAME_START\n%s\nDEVICE_THING_NAME_END\n", pcThingName);
     vTaskDelete(NULL);
 }
 
@@ -185,7 +324,7 @@ void vMqttConnectionTask(void* pvParameters)
 
     ESP_LOGI(TAG, "Establishing an MQTT connection...");
 
-    ret = mqttConnect(&xMQTTContext,
+    ret = eMqttConnect(&xMQTTContext,
         pcThingName);
 
     if (ret == MQTTSuccess)
@@ -218,7 +357,7 @@ void vMqttConnectionTask(void* pvParameters)
 
 void vNetworkHandlingTask(void* pvParameters)
 {
-    /* Initialize state */
+    /* Initialize Networking State */
     EventBits_t uxNetworkEventBits;
     xNetworkEventGroup = xEventGroupCreate();
     xEventGroupSetBits(xNetworkEventGroup,
@@ -291,7 +430,7 @@ void vSensorSendingTask(void* arg)
             "{ \"Temperature\": { \"unit\": \"C\", \"value\" : %f} }",
             tsens_out);
 
-        ret = mqttPublishAndReceiveFMConnect(&xMQTTContext, pcThingName, pcSendBuffer);
+        ret = eMqttPublishFMConnect(&xMQTTContext, pcThingName, pcSendBuffer);
 
         if (ret != MQTTSuccess)
         {
@@ -304,11 +443,9 @@ void vSensorSendingTask(void* arg)
     }
     vTaskDelete(NULL);
 }
+
 void app_main(void)
 {
-    size_t lengthRequired;
-    nvs_handle_t xNvsHandle;
-
     /* Initialize Non-Volatile Storage
      * Necessary for:
      * - WiFi drivers to store configs
@@ -317,23 +454,29 @@ void app_main(void)
      * - For getting/setting private key and device certificate */
     ESP_ERROR_CHECK(nvs_flash_init());
 
-    /* Open 15-min-connect provisioning namespace from NVS */
-    ESP_ERROR_CHECK(nvs_open("FMC", NVS_READONLY, &xNvsHandle));
-
     /* Extract WiFi SSID from NVS */
-    ESP_ERROR_CHECK(nvs_get_str(xNvsHandle, "wifiSsid", NULL, &lengthRequired));
-    pcWifiSsid = malloc(lengthRequired);
-    ESP_ERROR_CHECK(nvs_get_str(xNvsHandle, "wifiSsid", pcWifiSsid, &lengthRequired));
+    pcWifiSsid = pcNvsGetStr("nvs", "FMC", "wifiSsid");
+    if(pcWifiSsid == NULL)
+    {
+        ESP_LOGE(TAG, "Failed to retrieve WiFi SSID from NVS. Ensure that the device has had credentials flashed.");
+        return;
+    }
 
     /* Extract WiFi password from NVS */
-    ESP_ERROR_CHECK(nvs_get_str(xNvsHandle, "wifiPass", NULL, &lengthRequired));
-    pcWifiPass = malloc(lengthRequired);
-    ESP_ERROR_CHECK(nvs_get_str(xNvsHandle, "wifiPass", pcWifiPass, &lengthRequired));
+    pcWifiPass = pcNvsGetStr("nvs", "FMC", "wifiPass");
+    if(pcWifiPass == NULL)
+    {
+        ESP_LOGE(TAG, "Failed to retrieve WiFi password from NVS. Ensure that the device has had credentials flashed.");
+        return;
+    }
 
     /* Extract endpoint from NVS */
-    ESP_ERROR_CHECK(nvs_get_str(xNvsHandle, "endpoint", NULL, &lengthRequired));
-    pcEndpoint = malloc(lengthRequired);
-    ESP_ERROR_CHECK(nvs_get_str(xNvsHandle, "endpoint", pcEndpoint, &lengthRequired));
+    pcEndpoint = pcNvsGetStr("nvs", "FMC", "endpoint");
+    if(pcEndpoint == NULL)
+    {
+        ESP_LOGE(TAG, "Failed to retrieve endpoint from NVS. Ensure that the device has had credentials flashed.");
+        return;
+    }
 
     /* Initialize Espressif's default event loop that will handle propagating events for Espressif's:
      * -WiFi

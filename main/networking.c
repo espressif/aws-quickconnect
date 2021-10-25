@@ -178,7 +178,7 @@ static MQTTStatus_t prvMqttInit(NetworkContext_t* pxNetworkContext,
     return xResult;
 }
 
-MQTTStatus_t mqttConnect(MQTTContext_t* pxMQTTContext, const char* thingName)
+MQTTStatus_t eMqttConnect(MQTTContext_t* pxMQTTContext, const char* thingName)
 {
     bool xSessionPresent;
     MQTTStatus_t xResult;
@@ -212,17 +212,13 @@ MQTTStatus_t mqttConnect(MQTTContext_t* pxMQTTContext, const char* thingName)
     return xResult;
 }
 
-MQTTStatus_t mqttPublishAndReceiveFMConnect(MQTTContext_t* pxMQTTContext, 
+MQTTStatus_t eMqttPublishFMConnect(MQTTContext_t* pxMQTTContext, 
     const char* thingName,
     const char* sendBuffer)
 {
     MQTTStatus_t xResult;
-    MQTTPublishInfo_t xMQTTPublishInfo;
+    MQTTPublishInfo_t xMQTTPublishInfo = { 0 };
 
-    /* Some fields are not used by this demo so start with everything at 0. */
-    (void)memset((void*)&xMQTTPublishInfo, 0x00, sizeof(xMQTTPublishInfo));
-
-    /* This demo uses QoS1. */
     xMQTTPublishInfo.qos = MQTTQoS0;
     xMQTTPublishInfo.retain = false;
     xMQTTPublishInfo.pTopicName = thingName;
@@ -233,7 +229,7 @@ MQTTStatus_t mqttPublishAndReceiveFMConnect(MQTTContext_t* pxMQTTContext,
     /* Get a unique packet id. */
     usPublishPacketIdentifier = MQTT_GetPacketId(pxMQTTContext);
 
-    /* Send PUBLISH packet. Packet ID is not used for a QoS1 publish. */
+    /* Send PUBLISH packet. */
     xResult = MQTT_Publish(pxMQTTContext, &xMQTTPublishInfo, usPublishPacketIdentifier);
 
     if (xResult == MQTTSendFailed)
@@ -243,13 +239,6 @@ MQTTStatus_t mqttPublishAndReceiveFMConnect(MQTTContext_t* pxMQTTContext,
     else
     {
         ESP_LOGI(TAG, "MQTT publish succeeded.");
-        /*
-        xResult = MQTT_ProcessLoop(pxMQTTContext, 100);
-        if (xResult == MQTTSendFailed || xResult == MQTTRecvFailed)
-        {
-            ESP_LOGE(TAG, "MQTT Process Loop failure.");
-        }
-        */
     }
 
     return xResult;
