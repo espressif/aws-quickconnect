@@ -726,8 +726,8 @@ void app_main(void)
          NULL);
 
     /* Handles setting up and maintaining the network connection */
-    xTaskCreate(prvNetworkHandlingTask, "NetworkEventHandlingTask", 2048, NULL, 2,
-        NULL);
+    xTaskCreate(prvNetworkHandlingTask, "NetworkEventHandlingTask", 2048, NULL,
+        2, NULL);
 
     /* Handles getting and sending sensor data */
     xTaskCreate(prvSensorSendingTask, "SensorSendingTask", 
