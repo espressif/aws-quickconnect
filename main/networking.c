@@ -41,7 +41,7 @@ BaseType_t xTlsConnect(NetworkContext_t* pxNetworkContext,
         .cacert_buf = (const unsigned char*)pcServerCertPem,
         .cacert_bytes = strlen(pcServerCertPem) + 1,
         .clientcert_buf = (const unsigned char*)pcClientCertPem,
-        .clientcert_bytes = strlen(pcClientKeyPem) + 1,
+        .clientcert_bytes = strlen(pcClientCertPem) + 1,
         .clientkey_buf = (const unsigned char*)pcClientKeyPem,
         .clientkey_bytes = strlen(pcClientKeyPem) + 1,
     };

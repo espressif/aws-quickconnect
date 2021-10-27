@@ -213,7 +213,7 @@ static esp_err_t handle_claim_verify_response(esp_rmaker_claim_data_t *claim_dat
         int required_len = 0;
         if (json_obj_get_strlen(&jctx, "certificate", &required_len) == 0) {
             required_len++; /* For NULL termination */
-            self_claim_certificate =  calloc(1, required_len);
+            self_claim_certificate =  calloc(1, required_len + 1);
             if (!self_claim_certificate) {
                 json_parse_end(&jctx);
                 ESP_LOGE(TAG, "Failed to allocate %d bytes for certificate.", required_len);
@@ -464,7 +464,7 @@ esp_err_t __esp_rmaker_claim_init(esp_rmaker_claim_data_t *claim_data)
         return err;
     }
 
-    self_claim_private_key = (char *)malloc(strlen((char *)claim_data->payload));
+    self_claim_private_key = calloc(1, strlen((char *)claim_data->payload) + 1);
     memcpy(self_claim_private_key, claim_data->payload, strlen((char *)claim_data->payload));
     err = esp_rmaker_claim_generate_csr(claim_data, self_claim_name);
     if (err != ESP_OK) {

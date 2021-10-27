@@ -4,6 +4,7 @@
 #include "core_mqtt.h"
 #include "esp_tls.h"
 
+
 struct NetworkContext
 {
     esp_tls_t* pxTls;
@@ -20,9 +21,10 @@ BaseType_t xTlsConnect(NetworkContext_t* pxNetworkContext,
 
 BaseType_t xTlsDisconnect(NetworkContext_t* pxNetworkContext);
 
-MQTTStatus_t eMqttConnect(MQTTContext_t* pxMQTTContext, const char* pcThingName);
+MQTTStatus_t eMqttConnect(MQTTContext_t* pxMQTTContext, 
+    const char* pcThingName);
 
 MQTTStatus_t eMqttPublishFMConnect(MQTTContext_t* pxMQTTContext, 
-    const char* thingName, const char* sendBuffer);
+    const char* pcThingName, const char* pcSendBuffer);
 
 #endif /* FMCONNECT_NETWORKING_H */

@@ -1,15 +1,17 @@
-﻿#include <stdio.h>
+﻿/* Standard includes */
+#include <stdio.h>
+#include "string.h"
+
 #include "nvs_flash.h"
 #include "esp_log.h"
 #include "esp_event.h"
 #include "esp_wifi.h"
 
+/* FreeRTOS includes */
 #include "freertos/FreeRTOS.h"
 #include "freertos/queue.h"
 #include "freertos/task.h"
 #include "freertos/event_groups.h"
-
-#include "string.h"
 
 #include "credentials.h"
 #include "core_mqtt.h"
@@ -28,24 +30,45 @@
 /* Task Configs */
 #define FMC_TASK_DEFAULT_STACK_SIZE 3072
 
-/* Serial bookends for the utility */
-#define SERIAL_CERT_BOOKEND "DEVICE_CERT"
-#define SERIAL_THING_NAME_BOOKEND "DEVICE_THING_NAME"
+/* Serial outputs for the utility */
+#define UTIL_SERIAL_WIFI_CONNECTED "DEVICE_WIFI_CONNECTED"
+#define UTIL_SERIAL_WIFI_DISCONNECTED "DEVICE_WIFI_DISCONNECTED"
+#define UTIL_SERIAL_PRIV_KEY_AND_CSR_GEN "DEVICE_PRIV_KEY_AND_CSR_GEN"
+#define UTIL_SERIAL_PRIV_KEY_AND_CSR_FAIL "DEVICE_PRIV_KEY_AND_CSR_FAIL"
+#define UTIL_SERIAL_PRIV_KEY_AND_CSR_SUCCESS "DEVICE_PRIV_KEY_AND_CSR_SUCCESS"
+#define UTIL_SERIAL_SELF_CLAIM_PERF "DEVICE_SELF_CLAIM_PERF"
+#define UTIL_SERIAL_SELF_CLAIM_FAIL "DEVICE_SELF_CLAIM_FAIL"
+#define UTIL_SERIAL_SELF_CLAIM_SUCCESS "DEVICE_SELF_CLAIM_SUCCESS"
+#define UTIL_SERIAL_CERT_BOOKEND "DEVICE_CERT"
+#define UTIL_SERIAL_THING_NAME_BOOKEND "DEVICE_THING_NAME"
+
+/* Utility Ouput Event Group Bit Definitions */
+#define UTIL_WIFI_CONNECTED_BIT           (1 << 0)
+#define UTIL_WIFI_DISCONNECTED_BIT        (1 << 1)
+#define UTIL_PRIV_KEY_AND_CSR_GEN_BIT     (1 << 2)
+#define UTIL_PRIV_KEY_AND_CSR_FAIL_BIT    (1 << 3)
+#define UTIL_PRIV_KEY_AND_CSR_SUCCESS_BIT (1 << 4)
+#define UTIL_SELF_CLAIM_CERT_GET_BIT      (1 << 5)
+#define UTIL_SELF_CLAIM_CERT_FAIL_BIT     (1 << 6)
+#define UTIL_SELF_CLAIM_CERT_SUCCESS_BIT  (1 << 7)
 
 /* Network Event Group Bit Definitions */
-#define WIFI_CONNECTED_BIT           (1 << 0)
-#define WIFI_DISCONNECTED_BIT        (1 << 1)
-#define IP_GOT_BIT                   (1 << 2)
-#define SELF_CLAIM_PERFORMED_BIT     (1 << 3)
-#define SELF_CLAIM_NOT_PERFORMED_BIT (1 << 4)
-#define TLS_CONNECTED_BIT            (1 << 5)
-#define TLS_DISCONNECTED_BIT         (1 << 6)
-#define MQTT_CONNECTED_BIT           (1 << 7)
-#define MQTT_DISCONNECTED_BIT        (1 << 8)
+#define INIT_BIT                     (1 << 0)
+#define WIFI_CONNECTED_BIT           (1 << 1)
+#define WIFI_DISCONNECTED_BIT        (1 << 2)
+#define IP_GOT_BIT                   (1 << 3)
+#define PRIV_KEY_FAIL_BIT            (1 << 5)
+#define PRIV_KEY_SUCCESS_BIT         (1 << 6)
+#define CERT_FAIL_BIT                (1 << 8)
+#define CERT_SUCCESS_BIT             (1 << 9)
+#define TLS_CONNECTED_BIT            (1 << 11)
+#define TLS_DISCONNECTED_BIT         (1 << 12)
+#define MQTT_CONNECTED_BIT           (1 << 14)
+#define MQTT_DISCONNECTED_BIT        (1 << 15)
 
 static const char* TAG = "FMConnectMain";
 
-/* Provisioned Device Connection Credentials */
+/* Device Connection Credential Globals */
 static char* pcThingName =  NULL;
 static char* pcWifiSsid = NULL;
 static char* pcWifiPass = NULL;
@@ -53,42 +76,17 @@ static char* pcEndpoint = NULL;
 static char* pcDevCert = NULL;
 static char* pcDevKey = NULL;
 
+/* Utility Output Globals */
+static EventGroupHandle_t xUtilityOutputEventGroup;
+
 /* Networking Globals */
 static EventGroupHandle_t xNetworkEventGroup;
 static MQTTContext_t xMQTTContext = { 0 };
 static NetworkContext_t xNetworkContext = { 0 };
+static esp_rmaker_claim_data_t *pxSelfClaimData;
 
-static char *pcGenerateThingName(void)
-{
-    uint8_t pucEthMac[6];
-
-    char *pcRet = NULL;
-
-    if (esp_wifi_get_mac(WIFI_IF_STA, pucEthMac) != ESP_OK) {
-        ESP_LOGE(TAG, "Could not fetch MAC address. "
-            "Initialise Wi-Fi first");
-    }
-    else
-    {
-        pcRet = calloc(1, THING_NAME_SIZE);
-
-        if(pcRet == NULL)
-        {
-            ESP_LOGE(TAG, 
-            "Failed to allocate memory for thing name.");
-        }
-        else
-        {
-            snprintf(pcRet, THING_NAME_SIZE, "%02X%02X%02X%02X%02X%02X",
-                pucEthMac[0], pucEthMac[1], pucEthMac[2], pucEthMac[3], 
-                pucEthMac[4], pucEthMac[5]);
-        }
-    }
-
-    return pcRet;
-}
-
-static char *pcNvsGetStr(const char *pcPartitionName, const char *pcNamespace, 
+/* Non-Volatile Storage Access Functions **************************************/
+static char *prvNvsGetStr(const char *pcPartitionName, const char *pcNamespace, 
     const char *pcKey)
 {
     size_t uxLengthRequired;
@@ -148,8 +146,8 @@ static char *pcNvsGetStr(const char *pcPartitionName, const char *pcNamespace,
     return pcRet;
 }
 
-BaseType_t xNvsSetStr(const char *pcPartitionName, const char *pcNamespace,
-    const char *pcKey, const char *pcValue)
+static BaseType_t prvNvsSetStr(const char *pcPartitionName, 
+    const char *pcNamespace, const char *pcKey, const char *pcValue)
 {
     nvs_handle_t xNvsHandle;
 
@@ -195,13 +193,38 @@ BaseType_t xNvsSetStr(const char *pcPartitionName, const char *pcNamespace,
     return xRet;
 }
 
-static void vBookendedSerialSend(const char *pcBookend, const char *pcData)
+/* Networking Functions *******************************************************/
+static char *prvGenerateThingName(void)
 {
-    printf("\n%s_START\n%s\n%s_END\n", pcBookend, pcData, pcBookend);
-    return;
+    uint8_t pucEthMac[6];
+
+    char *pcRet = NULL;
+
+    if (esp_wifi_get_mac(WIFI_IF_STA, pucEthMac) != ESP_OK) {
+        ESP_LOGE(TAG, "Could not fetch MAC address. "
+            "Initialise Wi-Fi first");
+    }
+    else
+    {
+        pcRet = calloc(1, THING_NAME_SIZE);
+
+        if(pcRet == NULL)
+        {
+            ESP_LOGE(TAG, 
+            "Failed to allocate memory for thing name.");
+        }
+        else
+        {
+            snprintf(pcRet, THING_NAME_SIZE, "%02X%02X%02X%02X%02X%02X",
+                pucEthMac[0], pucEthMac[1], pucEthMac[2], pucEthMac[3], 
+                pucEthMac[4], pucEthMac[5]);
+        }
+    }
+
+    return pcRet;
 }
 
-static void vWifiEventHandler(void* arg, esp_event_base_t event_base,
+static void prvWifiEventHandler(void* arg, esp_event_base_t event_base,
     int32_t event_id, void* event_data)
 {
     switch (event_id)
@@ -209,12 +232,15 @@ static void vWifiEventHandler(void* arg, esp_event_base_t event_base,
     case WIFI_EVENT_STA_CONNECTED:
         ESP_LOGI(TAG, "WIFI CONNECTED!");
         xEventGroupSetBits(xNetworkEventGroup, WIFI_CONNECTED_BIT);
+        xEventGroupSetBits(xUtilityOutputEventGroup, UTIL_WIFI_CONNECTED_BIT);
         break;
     case WIFI_EVENT_STA_DISCONNECTED:
         ESP_LOGI(TAG, "WIFI DISCONNECTED! Attempting to reconnect...");
         xEventGroupClearBits(xNetworkEventGroup, 
             WIFI_CONNECTED_BIT | IP_GOT_BIT);
         xEventGroupSetBits(xNetworkEventGroup, WIFI_DISCONNECTED_BIT);
+        xEventGroupSetBits(xUtilityOutputEventGroup, 
+            UTIL_WIFI_DISCONNECTED_BIT);
         break;
     default:
         break;
@@ -223,7 +249,7 @@ static void vWifiEventHandler(void* arg, esp_event_base_t event_base,
     return;
 }
 
-static void vIpEventHandler(void* arg, esp_event_base_t event_base,
+static void prvIpEventHandler(void* arg, esp_event_base_t event_base,
     int32_t event_id, void* event_data)
 {
     switch (event_id)
@@ -238,101 +264,123 @@ static void vIpEventHandler(void* arg, esp_event_base_t event_base,
     return;
 }
 
-void vSelfClaimTask(void* pvParameters)
+static void prvGetPrivKeyTask(void *pvParamaters)
 {
-    (void)pvParameters;
-    
-    BaseType_t xSelfClaimSuccessful = pdFALSE;
+    (void)pvParamaters;
 
-    /* See if device already has device credentials from self-claiming */
-    pcDevCert = pcNvsGetStr("tls_keys", "FMC", "certificate");
-    pcDevKey = pcNvsGetStr("tls_keys", "FMC", "key");
+    BaseType_t xPrivKeyAcquired = pdFALSE;
 
-    /* Wait for WiFi to be connected */
-    xEventGroupWaitBits(xNetworkEventGroup, WIFI_CONNECTED_BIT, pdFALSE, pdTRUE,
-        portMAX_DELAY);
+    /* Notify utility that the device is generating private key and CSR */
+    xEventGroupSetBits(xUtilityOutputEventGroup, UTIL_PRIV_KEY_AND_CSR_GEN_BIT);
 
-    /* Perform self-claiming if the device does not have device credentials */
-    if(pcDevCert == NULL || pcDevKey == NULL)
+    pcDevKey = prvNvsGetStr("tls_keys", "FMC", "key");
+
+    if(pcDevKey == NULL)
     {
-        esp_rmaker_claim_data_t *pxSelfClaimData = 
-            esp_rmaker_self_claim_init(pcThingName);
-
+        pxSelfClaimData = esp_rmaker_self_claim_init(pcThingName);
         if(pxSelfClaimData != NULL)
         {
-            uint16_t usSelfClaimAttempts = 0;
-            while(xSelfClaimSuccessful == pdFALSE &&
-                usSelfClaimAttempts < MAX_SELF_CLAIM_ATTEMPTS)
+            pcDevKey = get_self_claim_private_key();
+
+            if(prvNvsSetStr("tls_keys", "FMC", "key", pcDevKey)
+                == pdFALSE)
             {
-                vTaskDelay(10);
-                /* Wait for the device to have an IP */
-                xEventGroupWaitBits(xNetworkEventGroup,
-                    IP_GOT_BIT,
-                    pdFALSE,
-                    pdTRUE,
-                    portMAX_DELAY);
-                    
-                if(esp_rmaker_self_claim_perform(pxSelfClaimData) != ESP_OK)
-                {
-                    ++usSelfClaimAttempts;
-                }
-                else
-                {
-                    xSelfClaimSuccessful = pdTRUE;
-                    pcDevCert = get_self_claim_certificate();
-                    pcDevKey = get_self_claim_private_key();
-
-                    if(xNvsSetStr("tls_keys", "FMC", "certificate", pcDevCert)
-                        == pdFALSE)
-                    {
-                        ESP_LOGE(TAG, 
-                            "Self-claiming certificate failed to store.");
-                    }
-                    
-                    if(xNvsSetStr("tls_keys", "FMC", "key", pcDevKey)
-                        == pdFALSE)
-                    {
-                        ESP_LOGE(TAG, 
-                            "Self-claiming private key failed to store.");
-                    }
-                }
+                ESP_LOGE(TAG, 
+                    "Self-claiming private key failed to store.");
             }
-
+            else
+            {
+                xPrivKeyAcquired = pdTRUE;
+            }
         }
-
     }
     else
     {
-        xSelfClaimSuccessful = pdTRUE;
+        xPrivKeyAcquired = pdTRUE;
     }
 
-    if(xSelfClaimSuccessful == pdTRUE)
+    if(xPrivKeyAcquired == pdTRUE)
     {
-        ESP_LOGI(TAG, "Self-claiming successful.");
-        xEventGroupSetBits(xNetworkEventGroup, SELF_CLAIM_PERFORMED_BIT);
-
-        /* Send device credentials out so they can be registered */
-        vBookendedSerialSend(SERIAL_CERT_BOOKEND, pcDevCert);
-        vBookendedSerialSend(SERIAL_THING_NAME_BOOKEND, pcThingName);
-
+        ESP_LOGI(TAG, "Private key acquired.");
+        xEventGroupSetBits(xNetworkEventGroup, PRIV_KEY_SUCCESS_BIT);
+        xEventGroupSetBits(xUtilityOutputEventGroup, 
+            UTIL_PRIV_KEY_AND_CSR_SUCCESS_BIT);
     }
     else
     {
-        ESP_LOGI(TAG, "Self-claiming failed.");
-        xEventGroupSetBits(xNetworkEventGroup, SELF_CLAIM_NOT_PERFORMED_BIT);
+        ESP_LOGE(TAG, "Failed to acquire private key.");
+        xEventGroupSetBits(xNetworkEventGroup, PRIV_KEY_FAIL_BIT);
+        xEventGroupSetBits(xUtilityOutputEventGroup, 
+            UTIL_PRIV_KEY_AND_CSR_FAIL_BIT);
     }
 
     vTaskDelete(NULL);
 }
 
-void vTlsConnectionTask(void* pvParameters)
+static void prvGetCertTask(void *pvParameters)
 {
-    BaseType_t xRet;
     (void)pvParameters;
 
-    /* Wait for the device to perform Self-Claiming and have an IP */
+    BaseType_t xCertAcquired = pdFALSE;
+
+    xEventGroupSetBits(xUtilityOutputEventGroup, UTIL_SELF_CLAIM_CERT_GET_BIT);
+
+    pcDevCert = prvNvsGetStr("tls_keys", "FMC", "certificate");
+
+    if(pcDevCert == NULL)
+    {
+        /* Wait for the device to have a private key and an IP*/
+        xEventGroupWaitBits(xNetworkEventGroup, 
+            PRIV_KEY_SUCCESS_BIT | IP_GOT_BIT, pdFALSE, pdTRUE, portMAX_DELAY);
+            
+        if(esp_rmaker_self_claim_perform(pxSelfClaimData) == ESP_OK)
+        {
+            pcDevCert = get_self_claim_certificate();
+            if(prvNvsSetStr("tls_keys", "FMC", "certificate", pcDevCert)
+                == pdFALSE)
+            {
+                ESP_LOGE(TAG, 
+                    "Self-claiming certificate failed to store.");
+            }
+            else
+            {
+                xCertAcquired = pdTRUE;
+            }
+        }
+    }
+    else
+    {
+        xCertAcquired = pdTRUE;
+    }
+
+    if(xCertAcquired == pdTRUE)
+    {
+        ESP_LOGI(TAG, "Self-Claiming certificate acquired.");
+        xEventGroupSetBits(xNetworkEventGroup, CERT_SUCCESS_BIT);
+        xEventGroupSetBits(xUtilityOutputEventGroup, 
+            UTIL_SELF_CLAIM_CERT_SUCCESS_BIT);
+    }
+    else
+    {
+        ESP_LOGE(TAG, "Failed to acquire self-claiming certificate.");
+        xEventGroupSetBits(xNetworkEventGroup, CERT_FAIL_BIT);
+        xEventGroupSetBits(xUtilityOutputEventGroup, 
+            UTIL_SELF_CLAIM_CERT_FAIL_BIT);
+    }
+
+    vTaskDelete(NULL);
+}
+
+static void prvTlsConnectionTask(void* pvParameters)
+{
+    (void)pvParameters;
+
+    BaseType_t xRet;
+
+    /* Wait for the device to perform have device credentials and an IP */
     xEventGroupWaitBits(xNetworkEventGroup,
-        SELF_CLAIM_PERFORMED_BIT | IP_GOT_BIT, pdFALSE, pdTRUE,portMAX_DELAY);
+        PRIV_KEY_SUCCESS_BIT | CERT_SUCCESS_BIT | IP_GOT_BIT, pdFALSE, pdTRUE, 
+        portMAX_DELAY);
 
     /* If a connection was previously established, close it to free memory */
     if (xNetworkContext.pxTls != NULL)
@@ -345,7 +393,6 @@ void vTlsConnectionTask(void* pvParameters)
         }
     }
 
-    ESP_LOGI(TAG, "Establishing a TLS connection...");
     xRet = xTlsConnect(&xNetworkContext, pcEndpoint, port, server_cert_pem,
         pcDevCert, pcDevKey);
 
@@ -364,7 +411,7 @@ void vTlsConnectionTask(void* pvParameters)
     vTaskDelete(NULL);
 }
 
-void vMqttConnectionTask(void* pvParameters)
+static void prvMqttConnectionTask(void* pvParameters)
 {
     MQTTStatus_t ret;
     (void)pvParameters;
@@ -403,47 +450,53 @@ void vMqttConnectionTask(void* pvParameters)
     vTaskDelete(NULL);
 }
 
-void vNetworkHandlingTask(void* pvParameters)
+static void prvNetworkHandlingTask(void* pvParameters)
 {
-    /* Initialize Networking State */
+    
     EventBits_t uxNetworkEventBits;
-    xNetworkEventGroup = xEventGroupCreate();
-    xEventGroupSetBits(xNetworkEventGroup,
-        WIFI_DISCONNECTED_BIT | SELF_CLAIM_NOT_PERFORMED_BIT | 
-        TLS_DISCONNECTED_BIT | MQTT_DISCONNECTED_BIT);
+    
+    /* Initialize Networking State */
+    xEventGroupSetBits(xNetworkEventGroup, INIT_BIT);
 
     while (1)
     {
-        uxNetworkEventBits = xEventGroupWaitBits(xNetworkEventGroup,
-            WIFI_DISCONNECTED_BIT | SELF_CLAIM_NOT_PERFORMED_BIT | 
-            TLS_DISCONNECTED_BIT | MQTT_DISCONNECTED_BIT, pdTRUE, pdFALSE,
-            portMAX_DELAY);
+        uxNetworkEventBits = xEventGroupWaitBits(xNetworkEventGroup, INIT_BIT |
+            WIFI_DISCONNECTED_BIT | PRIV_KEY_FAIL_BIT | CERT_FAIL_BIT 
+            | TLS_DISCONNECTED_BIT | MQTT_DISCONNECTED_BIT, 
+            pdTRUE, pdFALSE, portMAX_DELAY);
 
-        if ((uxNetworkEventBits & WIFI_DISCONNECTED_BIT) != 0)
+        if ((uxNetworkEventBits & (INIT_BIT | WIFI_DISCONNECTED_BIT)) != 0)
         {
             /* Establish a WiFi connection */
             ESP_LOGI(TAG, "Connecting to WiFi...");
             ESP_ERROR_CHECK(esp_wifi_connect());
         }
 
-        if ((uxNetworkEventBits & SELF_CLAIM_NOT_PERFORMED_BIT) != 0)
+        if ((uxNetworkEventBits & (INIT_BIT | PRIV_KEY_FAIL_BIT)) != 0)
         {
-            /* Perform Self-Claiming */
-            xTaskCreate(vSelfClaimTask, "SelfClaimTask", 
+            /* Get and set private key */
+            xTaskCreate(prvGetPrivKeyTask, "GetPrivKeyTask", 
                 FMC_TASK_DEFAULT_STACK_SIZE, NULL, 1, NULL);
         }
 
-        if ((uxNetworkEventBits & TLS_DISCONNECTED_BIT) != 0)
+        if ((uxNetworkEventBits & (INIT_BIT | CERT_FAIL_BIT)) != 0)
+        {
+            /* Get and set device certificate */
+            xTaskCreate(prvGetCertTask, "GetCertTask", 
+                FMC_TASK_DEFAULT_STACK_SIZE, NULL, 1, NULL);
+        }
+
+        if ((uxNetworkEventBits & (INIT_BIT | TLS_DISCONNECTED_BIT)) != 0)
         {
             /* Establish a TLS connection */
-            xTaskCreate(vTlsConnectionTask, "TlsConnectionTask", 
+            xTaskCreate(prvTlsConnectionTask, "TlsConnectionTask", 
                 FMC_TASK_DEFAULT_STACK_SIZE, NULL, 1, NULL);
         }
 
-        if ((uxNetworkEventBits & MQTT_DISCONNECTED_BIT) != 0)
+        if ((uxNetworkEventBits & (INIT_BIT | MQTT_DISCONNECTED_BIT)) != 0)
         {
             /* Establish an MQTT connection */
-            xTaskCreate(vMqttConnectionTask, "MqttConnectionTask", 
+            xTaskCreate(prvMqttConnectionTask, "MqttConnectionTask", 
                 FMC_TASK_DEFAULT_STACK_SIZE, NULL, 1, NULL);
         }
     }
@@ -451,12 +504,13 @@ void vNetworkHandlingTask(void* pvParameters)
     vTaskDelete(NULL);
 }
 
-void vSensorSendingTask(void* arg)
+static void prvSensorSendingTask(void* arg)
 {
     MQTTStatus_t ret;
-    char pcSendBuffer[256];
+    char pcSendBuffer[256] = { 0 };
 
     float tsens_out;
+    /* Initialize temperature sensor */
     temp_sensor_config_t temp_sensor = TSENS_CONFIG_DEFAULT();
     temp_sensor_get_config(&temp_sensor);
     temp_sensor.dac_offset = TSENS_DAC_DEFAULT;
@@ -468,21 +522,21 @@ void vSensorSendingTask(void* arg)
         vTaskDelay(1000 / portTICK_RATE_MS);
 
         /* Wait for device to be connected to MQTT */
-        xEventGroupWaitBits(xNetworkEventGroup,
-            MQTT_CONNECTED_BIT,
-            pdFALSE,
-            pdTRUE,
-            portMAX_DELAY);
+        xEventGroupWaitBits(xNetworkEventGroup, MQTT_CONNECTED_BIT, pdFALSE,
+            pdTRUE, portMAX_DELAY);
 
         temp_sensor_read_celsius(&tsens_out);
 
+        /* Create JSON data for visualizer */
         snprintf(pcSendBuffer,
             256,
             "{ \"Temperature\": { \"unit\": \"C\", \"value\" : %f} }",
             tsens_out);
 
+        /* Send JSON over MQTT connection */
         ret = eMqttPublishFMConnect(&xMQTTContext, pcThingName, pcSendBuffer);
 
+        /* If it was not a success then the connection was dropped */
         if (ret != MQTTSuccess)
         {
             /* Flag that the TLS connection and MQTT connection were dropped */
@@ -495,6 +549,94 @@ void vSensorSendingTask(void* arg)
     vTaskDelete(NULL);
 }
 
+/* Utility communication functions ********************************************/
+static void prvUtilSerialSendData(const char *pcBookend, const char *pcData)
+{
+    printf("\n%s_START\n%s\n%s_END\n", pcBookend, pcData, pcBookend);
+    return;
+}
+
+static void prvUtilSerialSendNotify(const char *pcNotification)
+{
+    printf("%s\n", pcNotification);
+    return;
+}
+
+static void prvUtilityOutputTask(void* arg)
+{
+    EventBits_t uxUtilityOutputEventBits;
+
+    /* WiFi may not connect immediately if the connection is bad, so this
+     * retries until it does connect. The utility handles notifying the user
+     * that WiFi hasn't connected after a certain number of attempts */
+    while(1)
+    {
+        uxUtilityOutputEventBits = xEventGroupWaitBits(xUtilityOutputEventGroup, 
+            UTIL_WIFI_CONNECTED_BIT | UTIL_WIFI_DISCONNECTED_BIT, pdTRUE, 
+            pdFALSE, portMAX_DELAY);
+        
+        if((uxUtilityOutputEventBits & UTIL_WIFI_DISCONNECTED_BIT) != 0)
+        {
+            prvUtilSerialSendNotify(UTIL_SERIAL_WIFI_DISCONNECTED);
+        }
+        else
+        {
+            prvUtilSerialSendNotify(UTIL_SERIAL_WIFI_CONNECTED);
+            break;
+        }
+    }
+
+    /* Notify the utility that the device is in the process of generating a
+     * Private Key and CSR to perform self-claiming of a device certificate */
+    uxUtilityOutputEventBits = xEventGroupWaitBits(xUtilityOutputEventGroup,
+        UTIL_PRIV_KEY_AND_CSR_GEN_BIT, pdTRUE, pdTRUE, portMAX_DELAY);
+
+    prvUtilSerialSendNotify(UTIL_SERIAL_PRIV_KEY_AND_CSR_GEN);
+
+    /* Notify the utility that the device has either succeeded or failed in
+     * generating a Private Key and CSR */
+    uxUtilityOutputEventBits = xEventGroupWaitBits(xUtilityOutputEventGroup,
+        UTIL_PRIV_KEY_AND_CSR_SUCCESS_BIT | UTIL_PRIV_KEY_AND_CSR_FAIL_BIT, 
+        pdTRUE, pdFALSE, portMAX_DELAY);
+
+    if((uxUtilityOutputEventBits & UTIL_PRIV_KEY_AND_CSR_FAIL_BIT) != 0)
+    {
+        prvUtilSerialSendNotify(UTIL_SERIAL_PRIV_KEY_AND_CSR_FAIL);
+    }
+    else
+    {
+        prvUtilSerialSendNotify(UTIL_SERIAL_PRIV_KEY_AND_CSR_SUCCESS);
+    }
+
+    /* Notify the utility that the device is in the process of self-claiming
+     * to get a certificate */
+    uxUtilityOutputEventBits = xEventGroupWaitBits(xUtilityOutputEventGroup,
+        UTIL_SELF_CLAIM_CERT_GET_BIT, pdTRUE, pdTRUE, portMAX_DELAY);
+
+    prvUtilSerialSendNotify(UTIL_SERIAL_SELF_CLAIM_PERF);
+
+    /* Notify the utility that the device has either succeeded or failed in
+     * self-claiming a certificate */
+    uxUtilityOutputEventBits = xEventGroupWaitBits(xUtilityOutputEventGroup,
+        UTIL_SELF_CLAIM_CERT_SUCCESS_BIT | UTIL_SELF_CLAIM_CERT_FAIL_BIT, 
+        pdTRUE, pdFALSE, portMAX_DELAY);
+
+    if((uxUtilityOutputEventBits & UTIL_SELF_CLAIM_CERT_FAIL_BIT) != 0)
+    {
+        prvUtilSerialSendNotify(UTIL_SERIAL_SELF_CLAIM_FAIL);
+    }
+    else
+    {
+        prvUtilSerialSendNotify(UTIL_SERIAL_SELF_CLAIM_SUCCESS);
+        /* Send device certificate and thing name out to the utility */
+        prvUtilSerialSendData(UTIL_SERIAL_CERT_BOOKEND, pcDevCert);
+        prvUtilSerialSendData(UTIL_SERIAL_THING_NAME_BOOKEND, pcThingName);
+    }
+
+    vTaskDelete(NULL);
+}
+
+/* Main ***********************************************************************/
 void app_main(void)
 {
     /* Initialize Non-Volatile Storage
@@ -506,7 +648,7 @@ void app_main(void)
     ESP_ERROR_CHECK(nvs_flash_init());
 
     /* Extract WiFi SSID from NVS */
-    pcWifiSsid = pcNvsGetStr("nvs", "FMC", "wifiSsid");
+    pcWifiSsid = prvNvsGetStr("nvs", "FMC", "wifiSsid");
     if(pcWifiSsid == NULL)
     {
         ESP_LOGE(TAG, "Failed to retrieve WiFi SSID from NVS."
@@ -515,7 +657,7 @@ void app_main(void)
     }
 
     /* Extract WiFi password from NVS */
-    pcWifiPass = pcNvsGetStr("nvs", "FMC", "wifiPass");
+    pcWifiPass = prvNvsGetStr("nvs", "FMC", "wifiPass");
     if(pcWifiPass == NULL)
     {
         ESP_LOGE(TAG, "Failed to retrieve WiFi password from NVS. "
@@ -524,7 +666,7 @@ void app_main(void)
     }
 
     /* Extract endpoint from NVS */
-    pcEndpoint = pcNvsGetStr("nvs", "FMC", "endpoint");
+    pcEndpoint = prvNvsGetStr("nvs", "FMC", "endpoint");
     if(pcEndpoint == NULL)
     {
         ESP_LOGE(TAG, "Failed to retrieve endpoint from NVS. "
@@ -540,14 +682,14 @@ void app_main(void)
 
     /* Add event handlers to the default event loop */
     ESP_ERROR_CHECK(esp_event_handler_instance_register(WIFI_EVENT,
-        ESP_EVENT_ANY_ID, &vWifiEventHandler, NULL, NULL));
+        ESP_EVENT_ANY_ID, &prvWifiEventHandler, NULL, NULL));
     ESP_ERROR_CHECK(esp_event_handler_instance_register(IP_EVENT,
-        ESP_EVENT_ANY_ID, &vIpEventHandler, NULL, NULL));
+        ESP_EVENT_ANY_ID, &prvIpEventHandler, NULL, NULL));
 
     /* Initialize networking. This initializes the TCP/IP stack, WiFi, and 
      * coreMQTT context */
     vNetworkingInit(&xNetworkContext, &xMQTTContext);
-
+    
     /* Set wifi credentials to connect to the provisioned WiFi access point */
     if(xSetWifiCredentials(pcWifiSsid, pcWifiPass) != pdTRUE)
     {
@@ -556,7 +698,7 @@ void app_main(void)
 
     /* Generate thing name. Since this is generated using the MAC address
      * WiFi needs to be initialized first */
-    pcThingName = pcGenerateThingName();
+    pcThingName = prvGenerateThingName();
 
     if(pcThingName == NULL)
     {
@@ -564,12 +706,20 @@ void app_main(void)
         return;
     }
 
+    /* Initialize Event Groups for the demo */
+    xNetworkEventGroup = xEventGroupCreate();
+    xUtilityOutputEventGroup = xEventGroupCreate();
+
+    /* Handles outputting device state to the utility */
+    xTaskCreate(prvUtilityOutputTask, "UtilityOutputTask", 2048, NULL, 2,
+         NULL);
+
     /* Handles setting up and maintaining the network connection */
-    xTaskCreate(vNetworkHandlingTask, "NetworkEventHandlingTask", 2048, NULL, 2,
+    xTaskCreate(prvNetworkHandlingTask, "NetworkEventHandlingTask", 2048, NULL, 2,
         NULL);
 
     /* Handles getting and sending sensor data */
-    xTaskCreate(vSensorSendingTask, "SensorSendingTask", 
+    xTaskCreate(prvSensorSendingTask, "SensorSendingTask", 
         FMC_TASK_DEFAULT_STACK_SIZE, NULL, 1, NULL);
 
     return;
