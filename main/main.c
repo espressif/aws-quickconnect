@@ -23,9 +23,10 @@
 /* Self-Claiming  */
 #include "esp_rmaker_claim.h"
 
-/* Self-Claiming Definitions */
-#define MAX_SELF_CLAIM_ATTEMPTS 10
+/* Definitions ****************************************************************/
+/* Buffers sizes  */
 #define THING_NAME_SIZE 20
+#define SEND_BUFFER_SIZE 256
 
 /* Task Configs */
 #define FMC_TASK_DEFAULT_STACK_SIZE 3072
@@ -66,6 +67,9 @@
 #define MQTT_CONNECTED_BIT           (1 << 14)
 #define MQTT_DISCONNECTED_BIT        (1 << 15)
 
+/* Globals ********************************************************************/
+
+/* Logging Tag */
 static const char* TAG = "FMConnectMain";
 
 /* Device Connection Credential Globals */
@@ -273,10 +277,16 @@ static void prvGetPrivKeyTask(void *pvParamaters)
     /* Notify utility that the device is generating private key and CSR */
     xEventGroupSetBits(xUtilityOutputEventGroup, UTIL_PRIV_KEY_AND_CSR_GEN_BIT);
 
+    /* Check if key is in NVS already */
     pcDevKey = prvNvsGetStr("tls_keys", "FMC", "key");
 
+    /* If key isn't in NVS already, then generate key and CSR and store */
     if(pcDevKey == NULL)
     {
+        /* TODO - store this inside NVS or refactor self-claiming as there is 
+         * a bug where the device succeeds here, but doesnt perform 
+         * self-claiming, causing pxSelfClaimData to be NULL when self-claiming
+         */
         pxSelfClaimData = esp_rmaker_self_claim_init(pcThingName);
         if(pxSelfClaimData != NULL)
         {
@@ -325,8 +335,10 @@ static void prvGetCertTask(void *pvParameters)
 
     xEventGroupSetBits(xUtilityOutputEventGroup, UTIL_SELF_CLAIM_CERT_GET_BIT);
 
+    /* Check if certificate is already in storage */
     pcDevCert = prvNvsGetStr("tls_keys", "FMC", "certificate");
 
+    /* If certificate isn't in storage then perform self-claiming and store */
     if(pcDevCert == NULL)
     {
         /* Wait for the device to have a private key and an IP*/
@@ -507,7 +519,7 @@ static void prvNetworkHandlingTask(void* pvParameters)
 static void prvSensorSendingTask(void* arg)
 {
     MQTTStatus_t ret;
-    char pcSendBuffer[256] = { 0 };
+    char pcSendBuffer[SEND_BUFFER_SIZE] = { 0 };
 
     float tsens_out;
     /* Initialize temperature sensor */
@@ -528,8 +540,7 @@ static void prvSensorSendingTask(void* arg)
         temp_sensor_read_celsius(&tsens_out);
 
         /* Create JSON data for visualizer */
-        snprintf(pcSendBuffer,
-            256,
+        snprintf(pcSendBuffer, SEND_BUFFER_SIZE,
             "{ \"Temperature\": { \"unit\": \"C\", \"value\" : %f} }",
             tsens_out);
 
