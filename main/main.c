@@ -612,8 +612,10 @@ static void prvUtilSerialSendNotify(const char *pcNotification)
     return;
 }
 
-static void prvUtilityOutputTask(void* arg)
+static void prvUtilityOutputTask(void* pvParameters)
 {
+    (void)pvParameters;
+    
     EventBits_t uxUtilityOutputEventBits;
 
     /* WiFi may not connect immediately if the connection is bad, so this
