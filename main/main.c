@@ -96,7 +96,6 @@ static esp_rmaker_claim_data_t *pxSelfClaimData;
 
 /* Non-Volatile Storage Access Functions **************************************/
 
-
 static char *prvNvsGetStr(const char *pcPartitionName, const char *pcNamespace, 
     const char *pcKey)
 {
@@ -107,7 +106,6 @@ static char *prvNvsGetStr(const char *pcPartitionName, const char *pcNamespace,
     if(pcPartitionName == NULL)
     {
         ESP_LOGE(TAG, "Partition name is null.");
-
     }
     else if(pcNamespace == NULL)
     {
@@ -205,6 +203,7 @@ static BaseType_t prvNvsSetStr(const char *pcPartitionName,
 }
 
 /* Networking Functions *******************************************************/
+
 static char *prvGenerateThingName(void)
 {
     uint8_t pucEthMac[6];
@@ -508,6 +507,8 @@ static void prvNetworkHandlingTask(void* pvParameters)
 
     while (1)
     {
+        /* Wait for initialization state or for any network task to fail.
+         * If a network task fails, this restarts it. */
         uxNetworkEventBits = xEventGroupWaitBits(xNetworkEventGroup, INIT_BIT |
             WIFI_DISCONNECTED_BIT | PRIV_KEY_FAIL_BIT | CERT_FAIL_BIT 
             | TLS_DISCONNECTED_BIT | MQTT_DISCONNECTED_BIT, 
