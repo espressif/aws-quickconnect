@@ -4,7 +4,6 @@
 #include "core_mqtt.h"
 #include "esp_tls.h"
 
-
 struct NetworkContext
 {
     esp_tls_t* pxTls;

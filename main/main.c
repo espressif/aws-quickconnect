@@ -13,6 +13,7 @@
 #include "freertos/task.h"
 #include "freertos/event_groups.h"
 
+/* TODO - create AWS cert file and import using CMAKE */
 #include "credentials.h"
 #include "core_mqtt.h"
 #include "networking.h"
@@ -24,7 +25,11 @@
 #include "esp_rmaker_claim.h"
 
 /* Definitions ****************************************************************/
-/* Buffers sizes  */
+
+/* Sensor Sending Task */
+#define SENSOR_SENDING_INTERVAL_MS 1000
+
+/* Buffer sizes  */
 #define THING_NAME_SIZE 20
 #define SEND_BUFFER_SIZE 256
 
@@ -90,6 +95,8 @@ static NetworkContext_t xNetworkContext = { 0 };
 static esp_rmaker_claim_data_t *pxSelfClaimData;
 
 /* Non-Volatile Storage Access Functions **************************************/
+
+
 static char *prvNvsGetStr(const char *pcPartitionName, const char *pcNamespace, 
     const char *pcKey)
 {
@@ -204,6 +211,8 @@ static char *prvGenerateThingName(void)
 
     char *pcRet = NULL;
 
+    /* Generate thing name from the device's MAC address, this requires that
+     * WiFi was initialized */
     if (esp_wifi_get_mac(WIFI_IF_STA, pucEthMac) != ESP_OK) {
         ESP_LOGE(TAG, "Could not fetch MAC address. "
             "Initialise Wi-Fi first");
@@ -228,18 +237,26 @@ static char *prvGenerateThingName(void)
     return pcRet;
 }
 
-static void prvWifiEventHandler(void* arg, esp_event_base_t event_base,
-    int32_t event_id, void* event_data)
+static void prvWifiEventHandler(void* pvParameters, esp_event_base_t xEventBase,
+    int32_t lEventId, void* pvEventData)
 {
-    switch (event_id)
+    (void)pvParameters;
+    (void)xEventBase;
+    (void)pvEventData;
+
+    switch (lEventId)
     {
     case WIFI_EVENT_STA_CONNECTED:
         ESP_LOGI(TAG, "WIFI CONNECTED!");
+        /* If WiFi is connected, notify networking tasks and utility output
+         * task */
         xEventGroupSetBits(xNetworkEventGroup, WIFI_CONNECTED_BIT);
         xEventGroupSetBits(xUtilityOutputEventGroup, UTIL_WIFI_CONNECTED_BIT);
         break;
     case WIFI_EVENT_STA_DISCONNECTED:
         ESP_LOGI(TAG, "WIFI DISCONNECTED! Attempting to reconnect...");
+        /* If WiFi is disconnected, notify networking tasks and utility output
+         * task */
         xEventGroupClearBits(xNetworkEventGroup, 
             WIFI_CONNECTED_BIT | IP_GOT_BIT);
         xEventGroupSetBits(xNetworkEventGroup, WIFI_DISCONNECTED_BIT);
@@ -253,12 +270,17 @@ static void prvWifiEventHandler(void* arg, esp_event_base_t event_base,
     return;
 }
 
-static void prvIpEventHandler(void* arg, esp_event_base_t event_base,
-    int32_t event_id, void* event_data)
+static void prvIpEventHandler(void* pvParameters, esp_event_base_t xEventBase,
+    int32_t lEventId, void* pvEventData)
 {
-    switch (event_id)
+    (void)pvParameters;
+    (void)xEventBase;
+    (void)pvEventData;
+
+    switch (lEventId)
     {
     case IP_EVENT_STA_GOT_IP:
+        /* If an IP is recieved, notify networking tasks */
         xEventGroupSetBits(xNetworkEventGroup, IP_GOT_BIT);
         break;
     default:
@@ -292,6 +314,8 @@ static void prvGetPrivKeyTask(void *pvParamaters)
         {
             pcDevKey = get_self_claim_private_key();
 
+            /* Store private key into NVS for the next time the device is
+             * rebooted  */
             if(prvNvsSetStr("tls_keys", "FMC", "key", pcDevKey)
                 == pdFALSE)
             {
@@ -312,6 +336,8 @@ static void prvGetPrivKeyTask(void *pvParamaters)
     if(xPrivKeyAcquired == pdTRUE)
     {
         ESP_LOGI(TAG, "Private key acquired.");
+        /* Notify networking tasks and utility output task that the private
+         * key and CSR were generated and successfully acquired */
         xEventGroupSetBits(xNetworkEventGroup, PRIV_KEY_SUCCESS_BIT);
         xEventGroupSetBits(xUtilityOutputEventGroup, 
             UTIL_PRIV_KEY_AND_CSR_SUCCESS_BIT);
@@ -319,6 +345,8 @@ static void prvGetPrivKeyTask(void *pvParamaters)
     else
     {
         ESP_LOGE(TAG, "Failed to acquire private key.");
+        /* Notify networking tasks and utility output task that the private key
+         * could not be acquired */
         xEventGroupSetBits(xNetworkEventGroup, PRIV_KEY_FAIL_BIT);
         xEventGroupSetBits(xUtilityOutputEventGroup, 
             UTIL_PRIV_KEY_AND_CSR_FAIL_BIT);
@@ -348,6 +376,8 @@ static void prvGetCertTask(void *pvParameters)
         if(esp_rmaker_self_claim_perform(pxSelfClaimData) == ESP_OK)
         {
             pcDevCert = get_self_claim_certificate();
+            /* Store certificate into NVS for the next time the device is
+             * rebooted */
             if(prvNvsSetStr("tls_keys", "FMC", "certificate", pcDevCert)
                 == pdFALSE)
             {
@@ -368,6 +398,8 @@ static void prvGetCertTask(void *pvParameters)
     if(xCertAcquired == pdTRUE)
     {
         ESP_LOGI(TAG, "Self-Claiming certificate acquired.");
+        /* Notify networking tasks and utility output task that the device
+         * certificate was successfully acquired */
         xEventGroupSetBits(xNetworkEventGroup, CERT_SUCCESS_BIT);
         xEventGroupSetBits(xUtilityOutputEventGroup, 
             UTIL_SELF_CLAIM_CERT_SUCCESS_BIT);
@@ -375,6 +407,8 @@ static void prvGetCertTask(void *pvParameters)
     else
     {
         ESP_LOGE(TAG, "Failed to acquire self-claiming certificate.");
+        /* Notify networking tasks and utility output task that the device 
+         * failed to acquire a certificate */
         xEventGroupSetBits(xNetworkEventGroup, CERT_FAIL_BIT);
         xEventGroupSetBits(xUtilityOutputEventGroup, 
             UTIL_SELF_CLAIM_CERT_FAIL_BIT);
@@ -425,8 +459,9 @@ static void prvTlsConnectionTask(void* pvParameters)
 
 static void prvMqttConnectionTask(void* pvParameters)
 {
-    MQTTStatus_t ret;
     (void)pvParameters;
+
+    MQTTStatus_t eRet;
 
     /* Wait for device to have a TLS connection */
     xEventGroupWaitBits(xNetworkEventGroup, TLS_CONNECTED_BIT, pdFALSE, pdTRUE,
@@ -434,19 +469,19 @@ static void prvMqttConnectionTask(void* pvParameters)
 
     ESP_LOGI(TAG, "Establishing an MQTT connection...");
 
-    ret = eMqttConnect(&xMQTTContext, pcThingName);
+    eRet = eMqttConnect(&xMQTTContext, pcThingName);
 
-    if (ret == MQTTSuccess)
+    if (eRet == MQTTSuccess)
     {
         ESP_LOGI(TAG, "MQTT CONNECTED!");
         xEventGroupSetBits(xNetworkEventGroup, MQTT_CONNECTED_BIT);
     }
-    else if (ret == MQTTNoMemory)
+    else if (eRet == MQTTNoMemory)
     {
         ESP_LOGE(TAG, "vMqttTask: xMQTTContext.networkBuffer is too small to "
             "send the connection packet.");
     }
-    else if (ret == MQTTSendFailed || ret == MQTTRecvFailed)
+    else if (eRet == MQTTSendFailed || eRet == MQTTRecvFailed)
     {
         ESP_LOGE(TAG, "vMqttTask: Send or Receive failed.");
         xEventGroupClearBits(xNetworkEventGroup, TLS_CONNECTED_BIT);
@@ -455,7 +490,7 @@ static void prvMqttConnectionTask(void* pvParameters)
     }
     else
     {
-        ESP_LOGE(TAG, "MQTT_Status: %s", MQTT_Status_strerror(ret));
+        ESP_LOGE(TAG, "MQTT_Status: %s", MQTT_Status_strerror(eRet));
         xEventGroupSetBits(xNetworkEventGroup, MQTT_DISCONNECTED_BIT);
     }
 
@@ -464,7 +499,8 @@ static void prvMqttConnectionTask(void* pvParameters)
 
 static void prvNetworkHandlingTask(void* pvParameters)
 {
-    
+    (void)pvParameters;
+
     EventBits_t uxNetworkEventBits;
     
     /* Initialize Networking State */
@@ -516,39 +552,41 @@ static void prvNetworkHandlingTask(void* pvParameters)
     vTaskDelete(NULL);
 }
 
-static void prvSensorSendingTask(void* arg)
+static void prvSensorSendingTask(void* pvParameters)
 {
-    MQTTStatus_t ret;
+    (void)pvParameters;
+    
+    MQTTStatus_t eRet;
     char pcSendBuffer[SEND_BUFFER_SIZE] = { 0 };
 
-    float tsens_out;
+    float xTsensOut;
     /* Initialize temperature sensor */
-    temp_sensor_config_t temp_sensor = TSENS_CONFIG_DEFAULT();
-    temp_sensor_get_config(&temp_sensor);
-    temp_sensor.dac_offset = TSENS_DAC_DEFAULT;
-    temp_sensor_set_config(temp_sensor);
+    temp_sensor_config_t xTsensConfig = TSENS_CONFIG_DEFAULT();
+    temp_sensor_get_config(&xTsensConfig);
+    xTsensConfig.dac_offset = TSENS_DAC_DEFAULT;
+    temp_sensor_set_config(xTsensConfig);
     temp_sensor_start();
 
     while (1) 
     {
-        vTaskDelay(1000 / portTICK_RATE_MS);
+        vTaskDelay(SENSOR_SENDING_INTERVAL_MS / portTICK_RATE_MS);
 
         /* Wait for device to be connected to MQTT */
         xEventGroupWaitBits(xNetworkEventGroup, MQTT_CONNECTED_BIT, pdFALSE,
             pdTRUE, portMAX_DELAY);
 
-        temp_sensor_read_celsius(&tsens_out);
+        temp_sensor_read_celsius(&xTsensOut);
 
         /* Create JSON data for visualizer */
         snprintf(pcSendBuffer, SEND_BUFFER_SIZE,
             "{ \"Temperature\": { \"unit\": \"C\", \"value\" : %f} }",
-            tsens_out);
+            xTsensOut);
 
         /* Send JSON over MQTT connection */
-        ret = eMqttPublishFMConnect(&xMQTTContext, pcThingName, pcSendBuffer);
+        eRet = eMqttPublishFMConnect(&xMQTTContext, pcThingName, pcSendBuffer);
 
         /* If it was not a success then the connection was dropped */
-        if (ret != MQTTSuccess)
+        if (eRet != MQTTSuccess)
         {
             /* Flag that the TLS connection and MQTT connection were dropped */
             xEventGroupClearBits(xNetworkEventGroup,
@@ -722,12 +760,12 @@ void app_main(void)
     xUtilityOutputEventGroup = xEventGroupCreate();
 
     /* Handles outputting device state to the utility */
-    xTaskCreate(prvUtilityOutputTask, "UtilityOutputTask", 2048, NULL, 2,
-         NULL);
+    xTaskCreate(prvUtilityOutputTask, "UtilityOutputTask", 
+        FMC_TASK_DEFAULT_STACK_SIZE, NULL, 2, NULL);
 
     /* Handles setting up and maintaining the network connection */
-    xTaskCreate(prvNetworkHandlingTask, "NetworkEventHandlingTask", 2048, NULL,
-        2, NULL);
+    xTaskCreate(prvNetworkHandlingTask, "NetworkEventHandlingTask", 
+        FMC_TASK_DEFAULT_STACK_SIZE, NULL, 2, NULL);
 
     /* Handles getting and sending sensor data */
     xTaskCreate(prvSensorSendingTask, "SensorSendingTask", 
