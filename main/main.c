@@ -1,6 +1,8 @@
 ﻿/* Standard includes */
 #include <stdio.h>
-#include "string.h"
+#include <stdlib.h>
+#include <string.h>
+#include <stdarg.h>
 
 #include "nvs_flash.h"
 #include "esp_log.h"
@@ -24,6 +26,9 @@
 /* Self-Claiming  */
 #include "esp_rmaker_claim.h"
 
+/* Graph JSON Builder */
+#include "qc_graph_json_builder.h"
+
 /* Definitions ****************************************************************/
 
 /* Sensor Sending Task */
@@ -32,6 +37,7 @@
 /* Buffer sizes  */
 #define THING_NAME_SIZE 20
 #define SEND_BUFFER_SIZE 256
+#define FORMAT_STRING_BUFFER_SIZE 256
 
 /* Task Configs */
 #define FMC_TASK_DEFAULT_STACK_SIZE 3072
@@ -422,7 +428,7 @@ static void prvTlsConnectionTask(void* pvParameters)
 
     BaseType_t xRet;
 
-    /* Wait for the device to perform have device credentials and an IP */
+    /* Wait for the device to have device credentials and an IP */
     xEventGroupWaitBits(xNetworkEventGroup,
         PRIV_KEY_SUCCESS_BIT | CERT_SUCCESS_BIT | IP_GOT_BIT, pdFALSE, pdTRUE, 
         portMAX_DELAY);
@@ -553,7 +559,7 @@ static void prvNetworkHandlingTask(void* pvParameters)
     vTaskDelete(NULL);
 }
 
-static void prvSensorSendingTask(void* pvParameters)
+static void prvQuickConnectGraphSendingTask(void* pvParameters)
 {
     (void)pvParameters;
     
@@ -570,17 +576,21 @@ static void prvSensorSendingTask(void* pvParameters)
 
     while (1) 
     {
+        /* Suspends the task for SENSOR_SENDING_INTERVAL_MS milliseconds */
         vTaskDelay(SENSOR_SENDING_INTERVAL_MS / portTICK_RATE_MS);
 
         /* Wait for device to be connected to MQTT */
         xEventGroupWaitBits(xNetworkEventGroup, MQTT_CONNECTED_BIT, pdFALSE,
             pdTRUE, portMAX_DELAY);
 
+
         temp_sensor_read_celsius(&xTsensOut);
 
         /* Create JSON data for visualizer */
         snprintf(pcSendBuffer, SEND_BUFFER_SIZE,
-            "{ \"Temperature\": { \"unit\": \"C\", \"value\" : %f} }",
+            "{"
+            "\"Temperature\": { \"unit\": \"C\", \"value\" : %f} "
+            "}",
             xTsensOut);
 
         /* Send JSON over MQTT connection */
@@ -600,6 +610,7 @@ static void prvSensorSendingTask(void* pvParameters)
 }
 
 /* Utility communication functions ********************************************/
+
 static void prvUtilSerialSendData(const char *pcBookend, const char *pcData)
 {
     printf("\n%s_START\n%s\n%s_END\n", pcBookend, pcData, pcBookend);
@@ -615,7 +626,7 @@ static void prvUtilSerialSendNotify(const char *pcNotification)
 static void prvUtilityOutputTask(void* pvParameters)
 {
     (void)pvParameters;
-    
+
     EventBits_t uxUtilityOutputEventBits;
 
     /* WiFi may not connect immediately if the connection is bad, so this
@@ -746,6 +757,7 @@ void app_main(void)
     if(xSetWifiCredentials(pcWifiSsid, pcWifiPass) != pdTRUE)
     {
         ESP_LOGE(TAG, "Failed to set WiFi credentials.");
+        return;
     }
 
     /* Generate thing name. Since this is generated using the MAC address
