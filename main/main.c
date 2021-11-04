@@ -4,6 +4,7 @@
 #include <string.h>
 #include <stdarg.h>
 
+/* ESP-IDF includes */
 #include "nvs_flash.h"
 #include "esp_log.h"
 #include "esp_event.h"
@@ -285,7 +286,7 @@ static void prvIpEventHandler(void* pvParameters, esp_event_base_t xEventBase,
     switch (lEventId)
     {
     case IP_EVENT_STA_GOT_IP:
-        /* If an IP is recieved, notify networking tasks */
+        /* If an IP is received, notify networking tasks */
         xEventGroupSetBits(xNetworkEventGroup, IP_GOT_BIT);
         break;
     default:
@@ -483,12 +484,12 @@ static void prvMqttConnectionTask(void* pvParameters)
     }
     else if (eRet == MQTTNoMemory)
     {
-        ESP_LOGE(TAG, "vMqttTask: xMQTTContext.networkBuffer is too small to "
-            "send the connection packet.");
+        ESP_LOGE(TAG, "xMQTTContext.networkBuffer is too small to send the "
+        "connection packet.");
     }
     else if (eRet == MQTTSendFailed || eRet == MQTTRecvFailed)
     {
-        ESP_LOGE(TAG, "vMqttTask: Send or Receive failed.");
+        ESP_LOGE(TAG, "MQTT send or receive failed.");
         xEventGroupClearBits(xNetworkEventGroup, TLS_CONNECTED_BIT);
         xEventGroupSetBits(xNetworkEventGroup,
             TLS_DISCONNECTED_BIT | MQTT_DISCONNECTED_BIT);
@@ -613,12 +614,14 @@ static void prvQuickConnectGraphSendingTask(void* pvParameters)
 
 static void prvUtilSerialSendData(const char *pcBookend, const char *pcData)
 {
+    /* ESP32 devices output over UART with printf */
     printf("\n%s_START\n%s\n%s_END\n", pcBookend, pcData, pcBookend);
     return;
 }
 
 static void prvUtilSerialSendNotify(const char *pcNotification)
 {
+    /* ESP32 devices output over UART with printf */
     printf("%s\n", pcNotification);
     return;
 }
