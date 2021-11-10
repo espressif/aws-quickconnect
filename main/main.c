@@ -308,8 +308,11 @@ static void prvGetPrivKeyTask(void *pvParamaters)
     /* Check if key is in NVS already */
     pcDevKey = prvNvsGetStr("tls_keys", "FMC", "key");
 
+    /* TODO - temp fix for below bug */
+    pcDevCert = prvNvsGetStr("tls_keys", "FMC", "certificate");
+
     /* If key isn't in NVS already, then generate key and CSR and store */
-    if(pcDevKey == NULL)
+    if(pcDevKey == NULL || pcDevCert == NULL)
     {
         /* TODO - store this inside NVS or refactor self-claiming as there is 
          * a bug where the device succeeds here, but doesnt perform 
@@ -740,6 +743,8 @@ void app_main(void)
         return;
     }
 
+    printf(pcEndpoint);
+
     /* Initialize Espressif's default event loop that will handle propagating 
      * events for Espressif's:
      * -WiFi
@@ -786,7 +791,7 @@ void app_main(void)
         FMC_TASK_DEFAULT_STACK_SIZE, NULL, 2, NULL);
 
     /* Handles getting and sending sensor data */
-    xTaskCreate(prvSensorSendingTask, "SensorSendingTask", 
+    xTaskCreate(prvQuickConnectGraphSendingTask, "QuickConnectGraphSendingTask", 
         FMC_TASK_DEFAULT_STACK_SIZE, NULL, 1, NULL);
 
     return;
