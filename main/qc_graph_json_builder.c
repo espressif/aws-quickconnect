@@ -4,6 +4,7 @@
 #include <stdarg.h>
 #include "qc_graph_json_builder.h"
 
+
 #define PRE_FORMAT_GRAPH_JSON_STRING \
     "\"%s\": { \"unit\": \"%s\", \"value\" : %s}"
 #define FORMAT_STRING_BUFFER_SIZE 256
@@ -11,7 +12,7 @@
 
 typedef enum GraphJsonStringError
 {
-    OK,
+    GRAPH_JSON_OK,
     MALLOC_FAILED,
     REALLOC_FAILED,
 } GraphJsonStringError_t;
@@ -30,7 +31,7 @@ static GraphJsonStringVars_t xGraphJsonStringVars = {
     .ulBufferSize = 0,
     .ulCurIndex = 0,
     .pcBuffer = NULL,
-    .xError = OK
+    .xError = GRAPH_JSON_OK
 };
 
 /* TODO - Update to take an int of how much bigger is needed and increment in
@@ -39,7 +40,7 @@ static GraphJsonStringVars_t xGraphJsonStringVars = {
 static void prvIncreaseGraphJsonBufferSize(void)
 {
 
-    if(xGraphJsonStringVars.xError != OK)
+    if(xGraphJsonStringVars.xError != GRAPH_JSON_OK)
     {
         return;
     }
@@ -78,14 +79,14 @@ void vQuickConnectGraphsStart(void)
 {
     xGraphJsonStringVars.ulNumSensorsAdded = 0;
     xGraphJsonStringVars.ulCurIndex = 0;
-    xGraphJsonStringVars.xError = OK;
+    xGraphJsonStringVars.xError = GRAPH_JSON_OK;
 
     if(xGraphJsonStringVars.ulBufferSize == 0)
     {
         prvIncreaseGraphJsonBufferSize();
     }
 
-    if(xGraphJsonStringVars.xError == OK)
+    if(xGraphJsonStringVars.xError == GRAPH_JSON_OK)
     {
         xGraphJsonStringVars.pcBuffer[0] = '{';
         xGraphJsonStringVars.ulCurIndex = 1;
@@ -104,7 +105,7 @@ void vQuickConnectGraphsAddGraph(const char *pcName, const char *pcUnit,
 
     va_list xArgs;
 
-    if(xGraphJsonStringVars.xError != OK)
+    if(xGraphJsonStringVars.xError != GRAPH_JSON_OK)
     {
         return;
     }
@@ -140,9 +141,19 @@ void vQuickConnectGraphsAddGraph(const char *pcName, const char *pcUnit,
         ulNumCharsWritten = vsnprintf(pcStartOfRemainingBuffer,
             ulRemainingBufferSize, pcFormatStringBuffer, xArgs);
 
-        if(ulNumCharsWritten > ulRemainingBufferSize)
+        if(ulNumCharsWritten >= ulRemainingBufferSize)
         {
-            /* TODO - resize buffer and retry */
+            while(ulNumCharsWritten >= ulRemainingBufferSize)
+            {
+                prvIncreaseGraphJsonBufferSize();
+                ulRemainingBufferSize = xGraphJsonStringVars.ulBufferSize - 
+                    xGraphJsonStringVars.ulCurIndex;
+                pcStartOfRemainingBuffer = xGraphJsonStringVars.pcBuffer + 
+                    xGraphJsonStringVars.ulCurIndex;
+
+                ulNumCharsWritten = vsnprintf(pcStartOfRemainingBuffer,
+                    ulRemainingBufferSize, pcFormatStringBuffer, xArgs);
+            }
         }
         else
         {
@@ -160,7 +171,7 @@ const char *pcQuickConnectGraphsGetErrorString(void)
 
     switch(xGraphJsonStringVars.xError)
     {
-    case OK:
+    case GRAPH_JSON_OK:
         pcRet = "No error.";
         break;
     case MALLOC_FAILED:
@@ -186,7 +197,7 @@ char *pcQuickConnectGraphsEnd(void)
         prvIncreaseGraphJsonBufferSize();
     }
 
-    if(xGraphJsonStringVars.xError == OK)
+    if(xGraphJsonStringVars.xError == GRAPH_JSON_OK)
     {
         xGraphJsonStringVars.pcBuffer[xGraphJsonStringVars.ulCurIndex] = '}';
         xGraphJsonStringVars.pcBuffer[xGraphJsonStringVars.ulCurIndex + 1] = 

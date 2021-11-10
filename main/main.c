@@ -568,9 +568,10 @@ static void prvQuickConnectGraphSendingTask(void* pvParameters)
     (void)pvParameters;
     
     MQTTStatus_t eRet;
-    char pcSendBuffer[SEND_BUFFER_SIZE] = { 0 };
+    char* pcSendBuffer;
 
     float xTsensOut;
+
     /* Initialize temperature sensor */
     temp_sensor_config_t xTsensConfig = TSENS_CONFIG_DEFAULT();
     temp_sensor_get_config(&xTsensConfig);
@@ -590,12 +591,12 @@ static void prvQuickConnectGraphSendingTask(void* pvParameters)
 
         temp_sensor_read_celsius(&xTsensOut);
 
-        /* Create JSON data for visualizer */
-        snprintf(pcSendBuffer, SEND_BUFFER_SIZE,
-            "{"
-            "\"Temperature\": { \"unit\": \"C\", \"value\" : %f} "
-            "}",
-            xTsensOut);
+        vQuickConnectGraphsStart();
+        /* ADD GRAPHS HERE ****************************************************/
+        vQuickConnectGraphsAddGraph("Temperature", "C", "%f", xTsensOut);
+        vQuickConnectGraphsAddGraph("Random", "Number", "%d", rand() % 4000);
+        /**********************************************************************/
+        pcSendBuffer = pcQuickConnectGraphsEnd();
 
         /* Send JSON over MQTT connection */
         eRet = eMqttPublishFMConnect(&xMQTTContext, pcThingName, pcSendBuffer);
@@ -742,8 +743,6 @@ void app_main(void)
             "Ensure that the device has had credentials flashed.");
         return;
     }
-
-    printf(pcEndpoint);
 
     /* Initialize Espressif's default event loop that will handle propagating 
      * events for Espressif's:
