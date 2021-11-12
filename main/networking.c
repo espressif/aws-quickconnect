@@ -66,9 +66,9 @@ BaseType_t xTlsConnect(NetworkContext_t* pxNetworkContext,
     const char* pcHostname, int xPort, const char* pcServerCertPem,
     const char* pcClientCertPem, const char* pcClientKeyPem)
 {
-    BaseType_t ret = pdTRUE;
+    BaseType_t xRet = pdTRUE;
 
-    esp_tls_cfg_t cfg = {
+    esp_tls_cfg_t xEspTlsConfig = {
         .cacert_buf = (const unsigned char*)pcServerCertPem,
         .cacert_bytes = strlen(pcServerCertPem) + 1,
         .clientcert_buf = (const unsigned char*)pcClientCertPem,
@@ -80,26 +80,26 @@ BaseType_t xTlsConnect(NetworkContext_t* pxNetworkContext,
     esp_tls_t* pxTls = esp_tls_init();
     pxNetworkContext->pxTls = pxTls;
 
-    if (esp_tls_conn_new_sync(pcHostname, strlen(pcHostname), xPort, &cfg, pxTls)
-        <= 0)
+    if (esp_tls_conn_new_sync(pcHostname, strlen(pcHostname), xPort, 
+        &xEspTlsConfig, pxTls) <= 0)
     {
-        ret = pdFALSE;
+        xRet = pdFALSE;
     }
 
-    return ret;
+    return xRet;
 }
 
 BaseType_t xTlsDisconnect(NetworkContext_t* pxNetworkContext)
 {
-    BaseType_t ret = pdTRUE;
+    BaseType_t xRet = pdTRUE;
 
     if (pxNetworkContext->pxTls != NULL && 
         esp_tls_conn_destroy(pxNetworkContext->pxTls) < 0)
     {
-        ret = pdFALSE;
+        xRet = pdFALSE;
     }
 
-    return ret;
+    return xRet;
 }
 
 static int32_t prvEspTlsTransportSend(NetworkContext_t* pxNetworkContext,
