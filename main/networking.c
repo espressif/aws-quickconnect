@@ -1,17 +1,46 @@
-#include "freertos/FreeRTOS.h"
+/* Standard includes */
 #include <string.h>
+
+/* FreeRTOS includes */
+#include "freertos/FreeRTOS.h"
+
+/* ESP-IDF includes */
 #include "esp_log.h"
 #include "esp_wifi.h"
 #include "esp_netif.h"
 #include "esp_tls.h"
 #include "esp_event.h"
+
+/* coreMQTT library include */
 #include "core_mqtt.h"
+
 #include "networking.h"
 
-#define MILLISECONDS_PER_SECOND ( 1000U )
-#define MILLISECONDS_PER_TICK ( MILLISECONDS_PER_SECOND / configTICK_RATE_HZ )
+/* Definitions ****************************************************************/
 
+/* Timing definitions */
+#define MILLISECONDS_PER_SECOND ( 1000U )
+#define MILLISECONDS_PER_TICK   ( MILLISECONDS_PER_SECOND / configTICK_RATE_HZ )
+
+/* Buffer sizes */
+#define MQTT_SHARED_BUFFER_SIZE ( 10000U )
+
+/* Globals ********************************************************************/
+
+/* MQTT */
+static uint32_t ulGlobalEntryTimeMs;
+static uint16_t usPublishPacketIdentifier;
+static uint8_t ucSharedBuffer[MQTT_SHARED_BUFFER_SIZE];
+static MQTTFixedBuffer_t xBuffer =
+{
+    ucSharedBuffer,
+    MQTT_SHARED_BUFFER_SIZE
+};
+
+/* Logging tag */
 static const char* TAG = "FMConnectNetworking";
+
+/* WiFi ***********************************************************************/
 
 BaseType_t xSetWifiCredentials(const char* ssid, const char* password)
 {
@@ -30,6 +59,8 @@ BaseType_t xSetWifiCredentials(const char* ssid, const char* password)
 
     return xRet;
 }
+
+/* TLS ************************************************************************/
 
 BaseType_t xTlsConnect(NetworkContext_t* pxNetworkContext,
     const char* pcHostname, int xPort, const char* pcServerCertPem,
@@ -72,37 +103,26 @@ BaseType_t xTlsDisconnect(NetworkContext_t* pxNetworkContext)
 }
 
 static int32_t prvEspTlsTransportSend(NetworkContext_t* pxNetworkContext,
-    const void* data,
-    size_t datalen)
+    const void* pvData, size_t uxDataLen)
 {
-    int32_t bytesSent = 0;
+    int32_t lBytesSent = 0;
 
-    bytesSent = esp_tls_conn_write(pxNetworkContext->pxTls, data, datalen);
+    lBytesSent = esp_tls_conn_write(pxNetworkContext->pxTls, pvData, uxDataLen);
 
-    return bytesSent;
+    return lBytesSent;
 }
 
 static int32_t prvEspTlsTransportRecv(NetworkContext_t* pxNetworkContext,
-    void* data,
-    size_t datalen)
+    void* pvData, size_t uxDataLen)
 {
-    int32_t bytesRead = 0;
+    int32_t lBytesRead = 0;
 
-    bytesRead = esp_tls_conn_read(pxNetworkContext->pxTls, data, datalen);
+    lBytesRead = esp_tls_conn_read(pxNetworkContext->pxTls, pvData, uxDataLen);
 
-    return bytesRead;
+    return lBytesRead;
 }
 
-/* MQTT Start */
-
-static uint32_t ulGlobalEntryTimeMs;
-static uint16_t usPublishPacketIdentifier;
-static uint8_t ucSharedBuffer[10000];
-static MQTTFixedBuffer_t xBuffer =
-{
-    ucSharedBuffer,
-    10000
-};
+/* MQTT ***********************************************************************/
 
 static uint32_t prvMqttGetTimeMs(void)
 {
@@ -218,19 +238,19 @@ MQTTStatus_t eMqttConnect(MQTTContext_t* pxMQTTContext, const char* thingName)
     return xResult;
 }
 
-MQTTStatus_t eMqttPublishFMConnect(MQTTContext_t* pxMQTTContext, 
-    const char* thingName,
-    const char* sendBuffer)
+MQTTStatus_t eMqttPublishQuickConnect(MQTTContext_t* pxMQTTContext, 
+    const char* pcThingName,
+    const char* pcSendBuffer)
 {
     MQTTStatus_t xResult;
     MQTTPublishInfo_t xMQTTPublishInfo = { 0 };
 
     xMQTTPublishInfo.qos = MQTTQoS0;
     xMQTTPublishInfo.retain = false;
-    xMQTTPublishInfo.pTopicName = thingName;
-    xMQTTPublishInfo.topicNameLength = (uint16_t)strlen(thingName);
-    xMQTTPublishInfo.pPayload = sendBuffer;
-    xMQTTPublishInfo.payloadLength = strlen(sendBuffer);
+    xMQTTPublishInfo.pTopicName = pcThingName;
+    xMQTTPublishInfo.topicNameLength = (uint16_t)strlen(pcThingName);
+    xMQTTPublishInfo.pPayload = pcSendBuffer;
+    xMQTTPublishInfo.payloadLength = strlen(pcSendBuffer);
 
     /* Get a unique packet id. */
     usPublishPacketIdentifier = MQTT_GetPacketId(pxMQTTContext);
@@ -245,11 +265,13 @@ MQTTStatus_t eMqttPublishFMConnect(MQTTContext_t* pxMQTTContext,
     }
     else
     {
-        ESP_LOGI(TAG, "MQTT publish succeeded.");
+        ESP_LOGI(TAG, "MQTT publish succeeded.\n Sent: %s", pcSendBuffer);
     }
 
     return xResult;
 }
+
+/* Initialization *************************************************************/
 
 void vNetworkingInit(NetworkContext_t* pxNetworkContext,
     MQTTContext_t* pxMQTTContext)

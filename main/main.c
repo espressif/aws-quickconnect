@@ -9,6 +9,7 @@
 #include "esp_log.h"
 #include "esp_event.h"
 #include "esp_wifi.h"
+#include "esp_random.h"
 
 /* FreeRTOS includes */
 #include "freertos/FreeRTOS.h"
@@ -16,9 +17,10 @@
 #include "freertos/task.h"
 #include "freertos/event_groups.h"
 
-/* TODO - create AWS cert file and import using CMAKE */
-#include "credentials.h"
+/* coreMQTT library include */
 #include "core_mqtt.h"
+
+/* Networking code include */
 #include "networking.h"
 
 /* Temperature Sensor Driver */
@@ -33,75 +35,79 @@
 /* Definitions ****************************************************************/
 
 /* Sensor Sending Task */
-#define SENSOR_SENDING_INTERVAL_MS 1000
+#define SENDING_INTERVAL_MS                  ( 1000U )
 
 /* Buffer sizes  */
-#define THING_NAME_SIZE 20
-#define SEND_BUFFER_SIZE 256
-#define FORMAT_STRING_BUFFER_SIZE 256
+#define THING_NAME_SIZE                      ( 60U )
+#define SEND_BUFFER_SIZE                     ( 256U )
+#define FORMAT_STRING_BUFFER_SIZE            ( 256U )
 
 /* Task Configs */
-#define FMC_TASK_DEFAULT_STACK_SIZE 3072
+#define FMC_TASK_DEFAULT_STACK_SIZE          ( 3072U )
 
 /* Serial outputs for the utility */
-#define UTIL_SERIAL_WIFI_CONNECTED "DEVICE_WIFI_CONNECTED"
-#define UTIL_SERIAL_WIFI_DISCONNECTED "DEVICE_WIFI_DISCONNECTED"
-#define UTIL_SERIAL_PRIV_KEY_AND_CSR_GEN "DEVICE_PRIV_KEY_AND_CSR_GEN"
-#define UTIL_SERIAL_PRIV_KEY_AND_CSR_FAIL "DEVICE_PRIV_KEY_AND_CSR_FAIL"
+#define UTIL_SERIAL_WIFI_CONNECTED           "DEVICE_WIFI_CONNECTED"
+#define UTIL_SERIAL_WIFI_DISCONNECTED        "DEVICE_WIFI_DISCONNECTED"
+#define UTIL_SERIAL_PRIV_KEY_AND_CSR_GEN     "DEVICE_PRIV_KEY_AND_CSR_GEN"
+#define UTIL_SERIAL_PRIV_KEY_AND_CSR_FAIL    "DEVICE_PRIV_KEY_AND_CSR_FAIL"
 #define UTIL_SERIAL_PRIV_KEY_AND_CSR_SUCCESS "DEVICE_PRIV_KEY_AND_CSR_SUCCESS"
-#define UTIL_SERIAL_SELF_CLAIM_PERF "DEVICE_SELF_CLAIM_PERF"
-#define UTIL_SERIAL_SELF_CLAIM_FAIL "DEVICE_SELF_CLAIM_FAIL"
-#define UTIL_SERIAL_SELF_CLAIM_SUCCESS "DEVICE_SELF_CLAIM_SUCCESS"
-#define UTIL_SERIAL_CERT_BOOKEND "DEVICE_CERT"
-#define UTIL_SERIAL_THING_NAME_BOOKEND "DEVICE_THING_NAME"
+#define UTIL_SERIAL_SELF_CLAIM_PERF          "DEVICE_SELF_CLAIM_PERF"
+#define UTIL_SERIAL_SELF_CLAIM_FAIL          "DEVICE_SELF_CLAIM_FAIL"
+#define UTIL_SERIAL_SELF_CLAIM_SUCCESS       "DEVICE_SELF_CLAIM_SUCCESS"
+#define UTIL_SERIAL_CERT_BOOKEND             "DEVICE_CERT"
+#define UTIL_SERIAL_THING_NAME_BOOKEND       "DEVICE_THING_NAME"
 
 /* Utility Ouput Event Group Bit Definitions */
-#define UTIL_WIFI_CONNECTED_BIT           (1 << 0)
-#define UTIL_WIFI_DISCONNECTED_BIT        (1 << 1)
-#define UTIL_PRIV_KEY_AND_CSR_GEN_BIT     (1 << 2)
-#define UTIL_PRIV_KEY_AND_CSR_FAIL_BIT    (1 << 3)
-#define UTIL_PRIV_KEY_AND_CSR_SUCCESS_BIT (1 << 4)
-#define UTIL_SELF_CLAIM_CERT_GET_BIT      (1 << 5)
-#define UTIL_SELF_CLAIM_CERT_FAIL_BIT     (1 << 6)
-#define UTIL_SELF_CLAIM_CERT_SUCCESS_BIT  (1 << 7)
+#define UTIL_WIFI_CONNECTED_BIT              (1 << 0)
+#define UTIL_WIFI_DISCONNECTED_BIT           (1 << 1)
+#define UTIL_PRIV_KEY_AND_CSR_GEN_BIT        (1 << 2)
+#define UTIL_PRIV_KEY_AND_CSR_FAIL_BIT       (1 << 3)
+#define UTIL_PRIV_KEY_AND_CSR_SUCCESS_BIT    (1 << 4)
+#define UTIL_SELF_CLAIM_CERT_GET_BIT         (1 << 5)
+#define UTIL_SELF_CLAIM_CERT_FAIL_BIT        (1 << 6)
+#define UTIL_SELF_CLAIM_CERT_SUCCESS_BIT     (1 << 7)
 
 /* Network Event Group Bit Definitions */
-#define INIT_BIT                     (1 << 0)
-#define WIFI_CONNECTED_BIT           (1 << 1)
-#define WIFI_DISCONNECTED_BIT        (1 << 2)
-#define IP_GOT_BIT                   (1 << 3)
-#define PRIV_KEY_FAIL_BIT            (1 << 5)
-#define PRIV_KEY_SUCCESS_BIT         (1 << 6)
-#define CERT_FAIL_BIT                (1 << 8)
-#define CERT_SUCCESS_BIT             (1 << 9)
-#define TLS_CONNECTED_BIT            (1 << 11)
-#define TLS_DISCONNECTED_BIT         (1 << 12)
-#define MQTT_CONNECTED_BIT           (1 << 14)
-#define MQTT_DISCONNECTED_BIT        (1 << 15)
+#define INIT_BIT                             (1 << 0)
+#define WIFI_CONNECTED_BIT                   (1 << 1)
+#define WIFI_DISCONNECTED_BIT                (1 << 2)
+#define IP_GOT_BIT                           (1 << 3)
+#define PRIV_KEY_FAIL_BIT                    (1 << 5)
+#define PRIV_KEY_SUCCESS_BIT                 (1 << 6)
+#define CERT_FAIL_BIT                        (1 << 8)
+#define CERT_SUCCESS_BIT                     (1 << 9)
+#define TLS_CONNECTED_BIT                    (1 << 11)
+#define TLS_DISCONNECTED_BIT                 (1 << 12)
+#define MQTT_CONNECTED_BIT                   (1 << 14)
+#define MQTT_DISCONNECTED_BIT                (1 << 15)
 
 /* Globals ********************************************************************/
 
-/* Logging Tag */
+/* Logging tag */
 static const char* TAG = "FMConnectMain";
 
-/* Device Connection Credential Globals */
-static char* pcThingName =  NULL;
-static char* pcWifiSsid = NULL;
-static char* pcWifiPass = NULL;
-static char* pcEndpoint = NULL;
-static char* pcDevCert = NULL;
-static char* pcDevKey = NULL;
+/* Device connection credentials */
+static char *pcThingName =  NULL;
+static char *pcWifiSsid = NULL;
+static char *pcWifiPass = NULL;
+static char *pcEndpoint = NULL;
+static char *pcDevCert = NULL;
+static char *pcDevKey = NULL;
+static int xPort = 8883;
+/* CMAKE imported file main/server_cert/root_ca.crt. Changing this file changes
+ * the root CA used for this demo. This is the AWS Root CA if left unchanged. */
+extern const char pcRootCA[] asm("_binary_root_ca_crt_start");
 
-/* Utility Output Globals */
+/* Utility output */
 static EventGroupHandle_t xUtilityOutputEventGroup;
 
-/* Networking Globals */
+/* Networking */
 static EventGroupHandle_t xNetworkEventGroup;
 static MQTTContext_t xMQTTContext = { 0 };
 static NetworkContext_t xNetworkContext = { 0 };
 static esp_rmaker_claim_data_t *pxSelfClaimData;
 
-/* Non-Volatile Storage Access Functions **************************************/
+/* Non-volatile storage access functions **************************************/
 
 static char *prvNvsGetStr(const char *pcPartitionName, const char *pcNamespace, 
     const char *pcKey)
@@ -211,36 +217,63 @@ static BaseType_t prvNvsSetStr(const char *pcPartitionName,
 
 /* Networking Functions *******************************************************/
 
-static char *prvGenerateThingName(void)
+static BaseType_t prvGetThingName(void)
 {
     uint8_t pucEthMac[6];
 
-    char *pcRet = NULL;
+    BaseType_t xRet = pdFALSE;
 
-    /* Generate thing name from the device's MAC address, this requires that
-     * WiFi was initialized */
-    if (esp_wifi_get_mac(WIFI_IF_STA, pucEthMac) != ESP_OK) {
-        ESP_LOGE(TAG, "Could not fetch MAC address. "
-            "Initialise Wi-Fi first");
-    }
-    else
+    /* Check if thingname is in NVS storage */
+    pcThingName = prvNvsGetStr("tls_keys", "FMC", "thingname");
+
+    /* If thingname is not in NVS, then generate and store */
+    if(pcThingName == NULL)
     {
-        pcRet = calloc(1, THING_NAME_SIZE);
-
-        if(pcRet == NULL)
-        {
-            ESP_LOGE(TAG, 
-            "Failed to allocate memory for thing name.");
+        /* Generate thing name from the device's MAC address, this requires that
+        * WiFi was initialized */
+        if (esp_wifi_get_mac(WIFI_IF_STA, pucEthMac) != ESP_OK) {
+            ESP_LOGE(TAG, "Could not fetch MAC address. "
+                "Initialise Wi-Fi first");
         }
         else
         {
-            snprintf(pcRet, THING_NAME_SIZE, "%02X%02X%02X%02X%02X%02X",
-                pucEthMac[0], pucEthMac[1], pucEthMac[2], pucEthMac[3], 
-                pucEthMac[4], pucEthMac[5]);
+            pcThingName = calloc(1, THING_NAME_SIZE);
+
+            if(pcThingName == NULL)
+            {
+                ESP_LOGE(TAG, 
+                "Failed to allocate memory for thingname.");
+            }
+            else
+            {
+                /* This creates a thing name from the MAC address and a random
+                * number to prevent thingname collision */
+                snprintf(pcThingName, THING_NAME_SIZE, 
+                    "%02X%02X%02X%02X%02X%02X%ld", pucEthMac[0], pucEthMac[1], 
+                    pucEthMac[2], pucEthMac[3], pucEthMac[4], pucEthMac[5], 
+                    esp_random());
+                
+                /* Store thingname into NVS for the next time the device is
+                 * rebooted  */
+                if(prvNvsSetStr("tls_keys", "FMC", "thingname", pcThingName)
+                    == pdFALSE)
+                {
+                    ESP_LOGE(TAG, 
+                        "Thingname failed to store.");
+                }
+                else
+                {
+                    xRet = pdTRUE;
+                }
+            }
         }
     }
+    else
+    {
+        xRet = pdTRUE;
+    }
 
-    return pcRet;
+    return xRet;
 }
 
 static void prvWifiEventHandler(void* pvParameters, esp_event_base_t xEventBase,
@@ -448,7 +481,7 @@ static void prvTlsConnectionTask(void* pvParameters)
         }
     }
 
-    xRet = xTlsConnect(&xNetworkContext, pcEndpoint, port, server_cert_pem,
+    xRet = xTlsConnect(&xNetworkContext, pcEndpoint, xPort, pcRootCA, 
         pcDevCert, pcDevKey);
 
     if (xRet == pdTRUE)
@@ -568,6 +601,7 @@ static void prvQuickConnectGraphSendingTask(void* pvParameters)
     (void)pvParameters;
     
     MQTTStatus_t eRet;
+
     char* pcSendBuffer;
 
     float xTsensOut;
@@ -582,7 +616,7 @@ static void prvQuickConnectGraphSendingTask(void* pvParameters)
     while (1) 
     {
         /* Suspends the task for SENSOR_SENDING_INTERVAL_MS milliseconds */
-        vTaskDelay(SENSOR_SENDING_INTERVAL_MS / portTICK_RATE_MS);
+        vTaskDelay(SENDING_INTERVAL_MS / portTICK_RATE_MS);
 
         /* Wait for device to be connected to MQTT */
         xEventGroupWaitBits(xNetworkEventGroup, MQTT_CONNECTED_BIT, pdFALSE,
@@ -599,7 +633,8 @@ static void prvQuickConnectGraphSendingTask(void* pvParameters)
         pcSendBuffer = pcQuickConnectGraphsEnd();
 
         /* Send JSON over MQTT connection */
-        eRet = eMqttPublishFMConnect(&xMQTTContext, pcThingName, pcSendBuffer);
+        eRet = eMqttPublishQuickConnect(&xMQTTContext, pcThingName, 
+            pcSendBuffer);
 
         /* If it was not a success then the connection was dropped */
         if (eRet != MQTTSuccess)
@@ -767,13 +802,11 @@ void app_main(void)
         return;
     }
 
-    /* Generate thing name. Since this is generated using the MAC address
+    /* Set thingname. Since thingname is generated using the MAC address
      * WiFi needs to be initialized first */
-    pcThingName = prvGenerateThingName();
-
-    if(pcThingName == NULL)
+    if(prvGetThingName() == pdFALSE)
     {
-        ESP_LOGE(TAG, "Failed to generate thing name.");
+        ESP_LOGE(TAG, "Failed to get thingname.");
         return;
     }
 

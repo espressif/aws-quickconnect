@@ -23,7 +23,7 @@ BaseType_t xTlsDisconnect(NetworkContext_t* pxNetworkContext);
 MQTTStatus_t eMqttConnect(MQTTContext_t* pxMQTTContext, 
     const char* pcThingName);
 
-MQTTStatus_t eMqttPublishFMConnect(MQTTContext_t* pxMQTTContext, 
+MQTTStatus_t eMqttPublishQuickConnect(MQTTContext_t* pxMQTTContext, 
     const char* pcThingName, const char* pcSendBuffer);
 
 #endif /* FMCONNECT_NETWORKING_H */
