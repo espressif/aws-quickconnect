@@ -19,11 +19,14 @@
 /* Definitions ****************************************************************/
 
 /* Timing definitions */
-#define MILLISECONDS_PER_SECOND ( 1000U )
-#define MILLISECONDS_PER_TICK   ( MILLISECONDS_PER_SECOND / configTICK_RATE_HZ )
+#define MILLISECONDS_PER_SECOND      ( 1000U )
+#define MILLISECONDS_PER_TICK        ( MILLISECONDS_PER_SECOND / \
+    configTICK_RATE_HZ )
 
 /* Buffer sizes */
-#define MQTT_SHARED_BUFFER_SIZE ( 10000U )
+#define MQTT_SHARED_BUFFER_SIZE      ( 10000U )
+#define WIFI_CONFIG_SSID_BUFFER_SIZE ( 32U )
+#define WIFI_CONFIG_PASS_BUFFER_SIZE ( 64U )
 
 /* Globals ********************************************************************/
 
@@ -45,10 +48,11 @@ static const char* TAG = "FMConnectNetworking";
 BaseType_t xSetWifiCredentials(const char* ssid, const char* password)
 {
     BaseType_t xRet = pdFALSE;
-    wifi_config_t wifi_config = { 0 };
-    strncpy((char*)wifi_config.sta.ssid, ssid, 32);
-    strncpy((char*)wifi_config.sta.password, password, 64);
-    if(esp_wifi_set_config(WIFI_IF_STA, &wifi_config) != ESP_OK)
+    wifi_config_t xWifiConfig = { 0 };
+    strncpy((char*)xWifiConfig.sta.ssid, ssid, WIFI_CONFIG_SSID_BUFFER_SIZE);
+    strncpy((char*)xWifiConfig.sta.password, password, 
+        WIFI_CONFIG_PASS_BUFFER_SIZE);
+    if(esp_wifi_set_config(WIFI_IF_STA, &xWifiConfig) != ESP_OK)
     {
         ESP_LOGE(TAG, "Failed to set WiFi credentials.");
     }
@@ -286,7 +290,7 @@ void vNetworkingInit(NetworkContext_t* pxNetworkContext,
 
     /* Initialize WiFi */
     esp_netif_t* sta_netif = esp_netif_create_default_wifi_sta();
-    assert(sta_netif);
+    assert(sta_netif != NULL);
     wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
     ESP_ERROR_CHECK(esp_wifi_init(&cfg));
 
@@ -295,6 +299,6 @@ void vNetworkingInit(NetworkContext_t* pxNetworkContext,
     ESP_ERROR_CHECK(esp_wifi_start());
 
     /* Initialize MQTT */
-    prvMqttInit(pxNetworkContext, pxMQTTContext);
+    (void)prvMqttInit(pxNetworkContext, pxMQTTContext);
 }
 
