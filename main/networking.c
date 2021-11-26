@@ -30,6 +30,9 @@
 
 /* Globals ********************************************************************/
 
+/* Logging tag */
+static const char* TAG = "QuickConnectNetworking";
+
 /* MQTT */
 static uint32_t ulGlobalEntryTimeMs;
 static uint16_t usPublishPacketIdentifier;
@@ -39,9 +42,6 @@ static MQTTFixedBuffer_t xBuffer =
     ucSharedBuffer,
     MQTT_SHARED_BUFFER_SIZE
 };
-
-/* Logging tag */
-static const char* TAG = "FMConnectNetworking";
 
 /* WiFi ***********************************************************************/
 

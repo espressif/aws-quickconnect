@@ -1,6 +1,6 @@
 ﻿/**
  * @file main.c
- * @brief Main file for the QuickConnect demo for the ESP32-C3
+ * @brief Main file for the QuickConnect demo for the ESP32-C3.
  */
 
 /* Standard includes */
@@ -33,9 +33,6 @@
 
 /* Self-claiming  */
 #include "esp_rmaker_claim.h"
-
-/* Graph JSON builder */
-#include "qc_graph_json_builder.h"
 
 /* Definitions ****************************************************************/
 
@@ -99,13 +96,15 @@
 #define RUNTIME_SAVE_CERT_KEY                "certificate"
 #define RUNTIME_SAVE_PRIV_KEY_KEY            "key"
 #define RUNTIME_SAVE_THINGNAME_KEY           "thingname"
+#define RUNTIME_SAVE_NODE_ID_KEY             "nodeid"
 
 /* Globals ********************************************************************/
 
 /* Logging tag */
-static const char* TAG = "FMConnectMain";
+static const char* TAG = "QuickConnectMain";
 
 /* Device connection configurations  */
+static char *pcNodeId = NULL;
 static char *pcThingName =  NULL;
 static char *pcWifiSsid = NULL;
 static char *pcWifiPass = NULL;
@@ -113,6 +112,7 @@ static char *pcEndpoint = NULL;
 static char *pcDevCert = NULL;
 static char *pcDevKey = NULL;
 static int xPort = 8883;
+
 /* ESP-IDF imported file main/server_cert/root_ca.crt. Changing this file 
  * changes the root CA used for this demo. This is the AWS Root CA if left 
  * unchanged. */
@@ -258,17 +258,17 @@ static BaseType_t prvNvsSetStr(const char *pcPartitionName,
 /* Networking Functions *******************************************************/
 
 /**
- * @brief Function to assign the thingname for the device.
- * This function acquires the thingname from non-volatile storage, if
- * a thingname has been stored. Otherwise, generates a thingname from the 
- * device's WiFi MAC address and a random number, and stores it in
- * non-volatile storage. The function then sets the global pcThingName to the 
- * acquired/generated thingname. If this function needs to generate a
- * thingname, then WiFi must be initialized first before calling this function.
+ * @brief Function to assign the thingname and node ID for the device.
+ * This function acquires the thingname and node ID from non-volatile storage, 
+ * if they have been stored. Otherwise, generates a node ID from the device's 
+ * WiFi MAC address and thingname by appending a random number, and stores them
+ * in non-volatile storage. The function then sets the globals pcNodeId and 
+ * pcThingName. If this function needs to generate either, then WiFi must be 
+ * initialized first before calling this function.
  * 
  * @return pdFALSE on failure; pdTRUE on success.
  */
-static BaseType_t prvAssignThingName(void)
+static BaseType_t prvAssignThingNameAndNodeId(void)
 {
     uint8_t pucEthMac[ETH_MAC_BUFFER_SIZE];
 
@@ -289,26 +289,40 @@ static BaseType_t prvAssignThingName(void)
         }
         else
         {
+            pcNodeId = calloc(1, THING_NAME_SIZE);
             pcThingName = calloc(1, THING_NAME_SIZE);
 
-            if(pcThingName == NULL)
+            if(pcNodeId == NULL || pcThingName == NULL)
             {
                 ESP_LOGE(TAG, 
-                "Failed to allocate memory for thingname.");
+                "Failed to allocate memory for thingname or nodeID.");
             }
             else
             {
-                /* This creates a thing name from the MAC address and a random
-                 * number to prevent thingname collision. */
+                /* This creates a nodeID for self-claiming service - DO NOT
+                 * CHANGE or self-claiming will not work */
+                snprintf(pcNodeId, THING_NAME_SIZE,
+                    "%02X%02X%02X%02X%02X%02X", pucEthMac[0], pucEthMac[1], 
+                    pucEthMac[2], pucEthMac[3], pucEthMac[4], pucEthMac[5]);
+
+                /* This creates a thing name from the nodeID and a random number
+                 * to prevent thingname collision. */
                 snprintf(pcThingName, THING_NAME_SIZE, 
-                    "%02X%02X%02X%02X%02X%02X%ld", pucEthMac[0], pucEthMac[1], 
-                    pucEthMac[2], pucEthMac[3], pucEthMac[4], pucEthMac[5], 
-                    esp_random());
+                    "%s%ld", pcNodeId, esp_random());
                 
-                /* Store thingname into NVS for the next time the device is
+                /* Store nodeID into NVS for the next time the device is
                  * rebooted. */
                 if(prvNvsSetStr(RUNTIME_SAVE_PARTITION, RUNTIME_SAVE_NAMESPACE, 
-                    RUNTIME_SAVE_THINGNAME_KEY, pcThingName) == pdFALSE)
+                    RUNTIME_SAVE_NODE_ID_KEY, pcThingName) == pdFALSE)
+                {
+                    ESP_LOGE(TAG, 
+                        "Failed to store nodeID.");
+                }
+                /* Store thingname into NVS for the next time the device is
+                 * rebooted. */
+                else if(prvNvsSetStr(RUNTIME_SAVE_PARTITION, 
+                    RUNTIME_SAVE_NAMESPACE, RUNTIME_SAVE_THINGNAME_KEY, 
+                    pcThingName) == pdFALSE)
                 {
                     ESP_LOGE(TAG, 
                         "Failed to store thingname.");
@@ -439,7 +453,7 @@ static void prvGetPrivKeyTask(void *pvParamaters)
          * stored inside of pxSelfClaimData and the private key is acquired with
          * a call to get_self_claim_private_key after this function is called. 
          */
-        pxSelfClaimData = esp_rmaker_self_claim_init(pcThingName);
+        pxSelfClaimData = esp_rmaker_self_claim_init(pcNodeId);
         if(pxSelfClaimData != NULL)
         {
             pcDevKey = get_self_claim_private_key();
@@ -487,7 +501,7 @@ static void prvGetPrivKeyTask(void *pvParamaters)
 
 /**
  * @brief FreeRTOS task function used to acquire and assign the device
- * device certificate for the demo. This function acquires the certificate from
+ * certificate for the demo. This function acquires the certificate from
  * non-volatile storage, if a certificate has been stored. Otherwise, using the
  * code-signing request generated by prvGetKeyTask in pxSelfClaimData, this 
  * function makes an HTTP request to Espressif's self-claiming API for RainMaker
@@ -727,7 +741,7 @@ static void prvQuickConnectGraphSendingTask(void* pvParameters)
     
     MQTTStatus_t eRet;
 
-    char* pcSendBuffer;
+    char pcSendBuffer[SEND_BUFFER_SIZE];
 
     float xTsensOut;
 
@@ -747,15 +761,57 @@ static void prvQuickConnectGraphSendingTask(void* pvParameters)
         xEventGroupWaitBits(xNetworkEventGroup, MQTT_CONNECTED_BIT, pdFALSE,
             pdTRUE, portMAX_DELAY);
 
-
         temp_sensor_read_celsius(&xTsensOut);
 
-        vQuickConnectGraphsStart();
-        /* ADD GRAPHS HERE ****************************************************/
-        vQuickConnectGraphsAddGraph("Temperature", "C", "%f", xTsensOut);
-        vQuickConnectGraphsAddGraph("Random", "Number", "%d", rand() % 4000);
-        /**********************************************************************/
-        pcSendBuffer = pcQuickConnectGraphsEnd();
+/* ADD GRAPHS HERE ************************************************************/
+#define CUSTOM_GRAPH_ENABLED 0
+#if !CUSTOM_GRAPH_ENABLED
+        snprintf(pcSendBuffer, SEND_BUFFER_SIZE, 
+            "["
+                "{"
+                    "\"label\" : \"Temperature\","
+                    "\"display_type\" : \"line_graph\","
+                    "\"values\" :"
+                    "["
+                        "{"
+                            "\"unit\" : \"C\","
+                            "\"value\" : %f,"
+                            "\"label\" : \"\""
+                        "}"
+                    "]"
+                "}"
+            "]", xTsensOut);
+#else
+        snprintf(pcSendBuffer, SEND_BUFFER_SIZE, 
+            "["
+                "{"
+                    "\"label\" : \"Temperature\","
+                    "\"display_type\" : \"line_graph\","
+                    "\"values\" :"
+                    "["
+                        "{"
+                            "\"unit\" : \"C\","
+                            "\"value\" : %f,"
+                            "\"label\" : \"\""
+                        "}"
+                    "]"
+                "},"
+                "{"
+                    "\"label\" : \"Random\","
+                    "\"display_type\" : \"line_graph\","
+                    "\"values\" :"
+                    "["
+                        "{"
+                            "\"unit\" : \"Number\","
+                            "\"value\" : %d,"
+                            "\"label\" : \"\""
+                        "}"
+                    "]"
+                "}"
+            "]", xTsensOut, rand() % 4000);
+#endif
+
+/******************************************************************************/
 
         /* Send JSON over MQTT connection. */
         eRet = eMqttPublishQuickConnect(&xMQTTContext, pcThingName, 
@@ -905,7 +961,7 @@ void app_main(void)
         UTIL_PROV_WIFI_SSID_KEY);
     if(pcWifiSsid == NULL)
     {
-        ESP_LOGE(TAG, "Failed to retrieve WiFi SSID from NVS."
+        ESP_LOGE(TAG, "Failed to retrieve WiFi SSID from NVS.\n"
             "Ensure that the device has had configurations flashed.");
         return;
     }
@@ -915,7 +971,7 @@ void app_main(void)
         UTIL_PROV_WIFI_PASS_KEY);
     if(pcWifiPass == NULL)
     {
-        ESP_LOGE(TAG, "Failed to retrieve WiFi password from NVS. "
+        ESP_LOGE(TAG, "Failed to retrieve WiFi password from NVS.\n"
             "Ensure that the device has had configurations flashed.");
         return;
     }
@@ -925,7 +981,7 @@ void app_main(void)
         UTIL_PROV_ENDPOINT_KEY);
     if(pcEndpoint == NULL)
     {
-        ESP_LOGE(TAG, "Failed to retrieve endpoint from NVS. "
+        ESP_LOGE(TAG, "Failed to retrieve endpoint from NVS.\n"
             "Ensure that the device has had configurations flashed.");
         return;
     }
@@ -955,7 +1011,7 @@ void app_main(void)
 
     /* Set thingname. Since thingname is generated using the MAC address
      * WiFi needs to be initialized first. */
-    if(prvAssignThingName() == pdFALSE)
+    if(prvAssignThingNameAndNodeId() == pdFALSE)
     {
         ESP_LOGE(TAG, "Failed to get thingname.");
         return;
