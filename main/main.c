@@ -274,12 +274,14 @@ static BaseType_t prvAssignThingNameAndNodeId(void)
 
     BaseType_t xRet = pdFALSE;
 
-    /* Check if thingname is in NVS storage. */
+    /* Check if thingname and nodeID is in NVS storage. */
     pcThingName = prvNvsGetStr(RUNTIME_SAVE_PARTITION, RUNTIME_SAVE_NAMESPACE, 
         RUNTIME_SAVE_THINGNAME_KEY);
+    pcNodeId = prvNvsGetStr(RUNTIME_SAVE_PARTITION, RUNTIME_SAVE_NAMESPACE, 
+        RUNTIME_SAVE_NODE_ID_KEY);
 
-    /* If thingname is not in NVS, then generate and store. */
-    if(pcThingName == NULL)
+    /* If thingname or nodeID is not in NVS, then generate and store. */
+    if(pcThingName == NULL || pcNodeId == NULL)
     {
         /* Generate thing name from the device's MAC address, this requires that
          * WiFi was initialized. */
@@ -313,7 +315,7 @@ static BaseType_t prvAssignThingNameAndNodeId(void)
                 /* Store nodeID into NVS for the next time the device is
                  * rebooted. */
                 if(prvNvsSetStr(RUNTIME_SAVE_PARTITION, RUNTIME_SAVE_NAMESPACE, 
-                    RUNTIME_SAVE_NODE_ID_KEY, pcThingName) == pdFALSE)
+                    RUNTIME_SAVE_NODE_ID_KEY, pcNodeId) == pdFALSE)
                 {
                     ESP_LOGE(TAG, 
                         "Failed to store nodeID.");
