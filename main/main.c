@@ -41,7 +41,7 @@
 
 /* Buffer sizes  */
 #define THING_NAME_SIZE                      ( 60U )
-#define SEND_BUFFER_SIZE                     ( 256U )
+#define SEND_BUFFER_SIZE                     ( 1024U )
 #define ETH_MAC_BUFFER_SIZE                  ( 6U )
 
 /* Task configs */
@@ -85,14 +85,14 @@
 
 /* Non-volatile storage definitions for provisioned data */
 #define UTIL_PROV_PARTITION                  "nvs"
-#define UTIL_PROV_NAMESPACE                  "FMC"
+#define UTIL_PROV_NAMESPACE                  "quickConnect"
 #define UTIL_PROV_WIFI_PASS_KEY              "wifiPass"
 #define UTIL_PROV_WIFI_SSID_KEY              "wifiSsid"
 #define UTIL_PROV_ENDPOINT_KEY               "endpoint"
 
 /* Non-volatile storage defintions for non-provisioned data */
-#define RUNTIME_SAVE_PARTITION               "tls_keys"
-#define RUNTIME_SAVE_NAMESPACE               "FMC"
+#define RUNTIME_SAVE_PARTITION               "runtime"
+#define RUNTIME_SAVE_NAMESPACE               "quickConnect"
 #define RUNTIME_SAVE_CERT_KEY                "certificate"
 #define RUNTIME_SAVE_PRIV_KEY_KEY            "key"
 #define RUNTIME_SAVE_THINGNAME_KEY           "thingname"
@@ -735,7 +735,7 @@ static void prvNetworkHandlingTask(void* pvParameters)
  * 
  * @param[in] pvParameters Parameters passed when the task is created. Not used.
  */
-static void prvQuickConnectGraphSendingTask(void* pvParameters)
+static void prvQuickConnectSendingTask(void* pvParameters)
 {
     (void)pvParameters;
     
@@ -774,7 +774,7 @@ static void prvQuickConnectGraphSendingTask(void* pvParameters)
                     "\"values\" :"
                     "["
                         "{"
-                            "\"unit\" : \"C\","
+                            "\"unit\" : \"Celsius\","
                             "\"value\" : %f,"
                             "\"label\" : \"\""
                         "}"
@@ -790,7 +790,7 @@ static void prvQuickConnectGraphSendingTask(void* pvParameters)
                     "\"values\" :"
                     "["
                         "{"
-                            "\"unit\" : \"C\","
+                            "\"unit\" : \"Celsius\","
                             "\"value\" : %f,"
                             "\"label\" : \"\""
                         "}"
@@ -961,7 +961,7 @@ void app_main(void)
         UTIL_PROV_WIFI_SSID_KEY);
     if(pcWifiSsid == NULL)
     {
-        ESP_LOGE(TAG, "Failed to retrieve WiFi SSID from NVS.\n"
+        ESP_LOGE(TAG, "Failed to retrieve WiFi SSID from NVS. "
             "Ensure that the device has had configurations flashed.");
         return;
     }
@@ -971,7 +971,7 @@ void app_main(void)
         UTIL_PROV_WIFI_PASS_KEY);
     if(pcWifiPass == NULL)
     {
-        ESP_LOGE(TAG, "Failed to retrieve WiFi password from NVS.\n"
+        ESP_LOGE(TAG, "Failed to retrieve WiFi password from NVS. "
             "Ensure that the device has had configurations flashed.");
         return;
     }
@@ -981,7 +981,7 @@ void app_main(void)
         UTIL_PROV_ENDPOINT_KEY);
     if(pcEndpoint == NULL)
     {
-        ESP_LOGE(TAG, "Failed to retrieve endpoint from NVS.\n"
+        ESP_LOGE(TAG, "Failed to retrieve endpoint from NVS. "
             "Ensure that the device has had configurations flashed.");
         return;
     }
@@ -1013,7 +1013,7 @@ void app_main(void)
      * WiFi needs to be initialized first. */
     if(prvAssignThingNameAndNodeId() == pdFALSE)
     {
-        ESP_LOGE(TAG, "Failed to get thingname.");
+        ESP_LOGE(TAG, "Failed to assign thingname and nodeID.");
         return;
     }
 
@@ -1030,7 +1030,7 @@ void app_main(void)
         FMC_TASK_DEFAULT_STACK_SIZE, NULL, 2, NULL);
 
     /* Handles getting and sending sensor data. */
-    xTaskCreate(prvQuickConnectGraphSendingTask, "QuickConnectGraphSendingTask", 
+    xTaskCreate(prvQuickConnectSendingTask, "QuickConnectGraphSendingTask", 
         FMC_TASK_DEFAULT_STACK_SIZE, NULL, 1, NULL);
 
     return;
