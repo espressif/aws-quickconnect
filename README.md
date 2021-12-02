@@ -31,7 +31,7 @@ After the Start_Quick_Connect utility has run and succeeded, the source code of 
 
 This repository is structured as an ESP-IDF project. See the [Getting Started Guide](https://docs.espressif.com/projects/esp-idf/en/latest/esp32c3/get-started/index.html) for ESP-IDF for full steps to configure and use ESP-IDF to build projects. NOTE: This repository requires ESP-IDF v4.4 or higher.
 
-Before project configuration and build, be sure to set the correct chip target running `idf.py set-target esp32c3` in the root directory of this source code.
+Before project configuration and build, be sure to set the correct chip target by running `idf.py set-target esp32c3` in the root directory of this source code.
 
 Then run `idf.py -p < PORT > flash` to build and flash the project, where < PORT > can be determined following the Check Port instructions found in [Establish a Serial Connection with ESP32-C3](https://docs.espressif.com/projects/esp-idf/en/latest/esp32c3/get-started/establish-serial-connection.html). On Windows, < PORT > will have the format of COM* (e.g. COM3). On Linux, < PORT > will have the format of /dev/tty* (e.g. /dev/ttyUSB0). On Mac, < PORT > will have the format of /dev/cu.* (e.g. /dev/cu.SLAB_USBtoUART).
 
