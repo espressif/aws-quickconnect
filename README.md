@@ -37,6 +37,4 @@ Then run `idf.py -p < PORT > flash` to build and flash the project.
 
 < PORT > can be determined following the Check Port instructions found in [Establish a Serial Connection with ESP32-C3](https://docs.espressif.com/projects/esp-idf/en/latest/esp32c3/get-started/establish-serial-connection.html). On Windows, < PORT > will have the format of COM* (e.g. COM3). On Linux, < PORT > will have the format of /dev/tty* (e.g. /dev/ttyUSB0). On Mac, < PORT > will have the format of /dev/cu.* (e.g. /dev/cu.SLAB_USBtoUART).
 
-The serial output of the device can also be monitored by running `idf.py -p < PORT > monitor`.
-
-
+The serial output of the device can also be monitored by running `idf.py -p < PORT > monitor` after building.
