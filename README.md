@@ -7,7 +7,7 @@ The ESP32-C3 has been configured to work with the AWS Quick Connect demo. This d
 
 ## How to use example
 
-Follow the steps on [Establish a Serial Conniection with ESP32-C3](https://docs.espressif.com/projects/esp-idf/en/latest/esp32c3/get-started/establish-serial-connection.html) to ensure a connection can be established with the ESP32-C3.
+Follow the steps on [Establish a Serial Connection with ESP32-C3](https://docs.espressif.com/projects/esp-idf/en/latest/esp32c3/get-started/establish-serial-connection.html) to ensure a connection can be established with the ESP32-C3.
 
 Inside the bin folder, there are zipped executable packages. Extract the package that corresponds with your operating system and run the Start_Quick_Connect executable. This is necessary to register your device with Espressif's Quick Connect account on AWS, as well as provision your device with the credentials necessary to connect to AWS and publish messages.
 
